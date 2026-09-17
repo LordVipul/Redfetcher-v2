@@ -53,8 +53,17 @@ def get_scrape_start(subreddit, client):
 
 
 def fetch_posts_batch(client, subreddit, start, end, limit=100, fields=None):
-    """Fetch all posts between start and end using fixed monthly windows."""
+    """Fetch all posts between start and end using monthly windows.
+    When the current month is reached, switches to daily windows to
+    ensure all posts are captured (monthly windows are capped at 100 posts).
+    """
+    last_window_start = None
+    last_window_end = None
+    last_had_limit = False
+
     for window_start, window_end in split_time_range(start, end, step_hours=720):
+        last_window_start = window_start
+        last_window_end = window_end
         try:
             data = client.search_posts(
                 subreddit=subreddit,
@@ -73,6 +82,31 @@ def fetch_posts_batch(client, subreddit, start, end, limit=100, fields=None):
             continue
 
         yield posts
+        if len(posts) >= limit:
+            last_had_limit = True
+
+    # If the last window was the current month (truncated to 'end') and hit the limit,
+    # switch to daily windows to capture remaining posts
+    if last_had_limit and last_window_end and last_window_end.date() >= end.date():
+        for window_start, window_end in split_time_range(last_window_start, end, step_hours=24):
+            try:
+                data = client.search_posts(
+                    subreddit=subreddit,
+                    after=window_start.strftime("%Y-%m-%d"),
+                    before=window_end.strftime("%Y-%m-%d"),
+                    limit=limit,
+                    sort="asc",
+                    fields=fields,
+                )
+                posts = normalize_response(data)
+            except Exception as e:
+                log.warning(f"[{subreddit}] Error fetching {window_start.date()}: {e}")
+                continue
+
+            if not posts:
+                continue
+
+            yield posts
 
 
 # ── Scrape ───────────────────────────────────────────────────────────
@@ -99,8 +133,8 @@ def scrape_subreddit(subreddit):
             limit=config.POSTS_PER_REQUEST,
             fields=["id", "title", "url", "score", "num_comments", "created_utc", "subreddit"],
         ):
-            database.insert_posts(posts)
-            count += len(posts)
+            actual = database.insert_posts(posts)
+            count += actual
             batch_num += 1
 
             if batch_num % 5 == 0:

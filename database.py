@@ -32,34 +32,17 @@ def init_db():
     conn.close()
 
 
-def insert_post(post):
-    conn = get_connection()
-    conn.execute(
-        "INSERT OR IGNORE INTO posts (id, url, title, score, num_comments, created_utc, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            post["id"],
-            post["url"],
-            post["title"],
-            post["score"],
-            post["num_comments"],
-            post["created_utc"],
-            post["subreddit"],
-        ),
-    )
-    conn.commit()
-    conn.close()
-
-
 def insert_posts(posts):
     if not posts:
-        return
+        return 0
     conn = get_connection()
     try:
-        conn.executemany(
+        cursor = conn.executemany(
             "INSERT OR IGNORE INTO posts (id, url, title, score, num_comments, created_utc, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [(p["id"], p["url"], p["title"], p["score"], p["num_comments"], p["created_utc"], p["subreddit"]) for p in posts],
         )
         conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 

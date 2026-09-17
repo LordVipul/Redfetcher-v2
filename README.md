@@ -175,7 +175,7 @@ Resume logic: `SELECT MAX(created_utc) FROM posts WHERE subreddit = ?` determine
 
 ## Project Structure
 
-```
+```text
 redfetcher-v2/
 ├── config.py          # Settings: subreddit list, API config, request delay
 ├── database.py        # SQLite init, batch insert (executemany), query helpers
