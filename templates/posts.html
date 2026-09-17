@@ -164,7 +164,7 @@
         {% for post in posts %}
         <div class="post-card">
             <div class="title">
-                <a href="https://www.reddit.com{{ post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
+                <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
             </div>
             <div>
                 <a href="/posts?subreddit={{ post.subreddit }}" class="badge">r/{{ post.subreddit }}</a>

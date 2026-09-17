@@ -51,22 +51,17 @@ def insert_post(post):
 
 
 def insert_posts(posts):
+    if not posts:
+        return
     conn = get_connection()
-    for post in posts:
-        conn.execute(
+    try:
+        conn.executemany(
             "INSERT OR IGNORE INTO posts (id, url, title, score, num_comments, created_utc, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                post["id"],
-                post["url"],
-                post["title"],
-                post["score"],
-                post["num_comments"],
-                post["created_utc"],
-                post["subreddit"],
-            ),
+            [(p["id"], p["url"], p["title"], p["score"], p["num_comments"], p["created_utc"], p["subreddit"]) for p in posts],
         )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_max_created_utc(subreddit):
