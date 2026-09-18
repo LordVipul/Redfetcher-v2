@@ -5,119 +5,28 @@
     <title>RedFetcher v2 — Posts</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <style>
-        :root {
-            --bg: #0a0a0a;
-            --surface: #141414;
-            --border: #2a2a2a;
-            --accent: #b43131;
-            --text-primary: #e0e0e0;
-            --text-secondary: #888;
-            --link-visited: #ff5e5e;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: "Inter", system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text-primary);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        a:visited { color: var(--link-visited); }
-        header {
-            background: var(--accent);
-            color: #fff;
-            padding: 0.8rem 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        header h1 { font-family: "Montserrat", sans-serif; font-size: 1.6rem; margin: 0; }
-        header a { color: #fff; font-size: 0.9rem; }
-        main { flex: 1; max-width: 900px; margin: 0 auto; padding: 1.5rem; width: 100%; }
-        h2 { color: var(--accent); margin-bottom: 1rem; }
-        .filter-bar {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-            align-items: flex-end;
-        }
-        .filter-bar .field { display: flex; flex-direction: column; gap: 0.25rem; }
-        .filter-bar label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; }
-        .filter-bar select, .filter-bar input[type="date"], .filter-bar input[type="text"] {
-            background: var(--bg);
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.4rem 0.6rem;
-            font-size: 0.9rem;
-        }
-        .filter-bar button {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 6px;
-            padding: 0.4rem 1rem;
-            cursor: pointer;
-            font-size: 0.9rem;
-            align-self: flex-end;
-        }
-        .filter-bar button:hover { opacity: 0.85; }
-        .post-card {
-            background: var(--surface);
-            border-left: 4px solid var(--accent);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 0.75rem;
-            display: flex;
-            align-items: flex-start;
-            gap: 1rem;
-        }
-        .post-card .title { flex: 1; }
-        .post-card .title a { font-weight: 500; color: var(--accent); font-size: 1rem; }
-        .post-card .title a:hover { text-decoration: underline; }
-        .post-card .meta { font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
-        .post-card .meta i { margin-right: 0.2rem; }
-        .badge {
-            background: var(--accent);
-            color: #fff;
-            font-size: 0.7rem;
-            padding: 0.15rem 0.5rem;
-            border-radius: 4px;
-            text-decoration: none;
-        }
-        .badge:hover { opacity: 0.85; }
-        .no-posts { color: var(--text-secondary); padding: 2rem; text-align: center; }
-        .sort-indicator { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem; }
-        footer {
-            text-align: center;
-            padding: 1rem;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            border-top: 1px solid var(--border);
-        }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
     <header>
-        <h1><a href="/">RedFetcher v2</a></h1>
-        <span style="font-size:0.9rem; opacity:0.85;">Posts</span>
+        <div class="logo">Red<span class="accent">F</span>etcher v2</div>
+        <nav>
+            <a href="/">Subreddits</a>
+            <a href="/posts" class="active">Posts</a>
+            <a href="/bookmarks">Bookmarks</a>
+        </nav>
+        <div class="total-count">{{ total_posts }} posts</div>
     </header>
+
     <main>
-        <h2>Filter Posts</h2>
+        <h2>Posts</h2>
+
         <div class="filter-bar">
             <form method="get" action="/posts" style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:flex-end; width:100%;">
                 <div class="field">
-                    <label>Subreddit</label>
-                    <select name="subreddit">
+                    <label for="f_subreddit">Subreddit</label>
+                    <select name="subreddit" id="f_subreddit">
                         <option value="">All</option>
                         {% for s in all_subreddits %}
                         <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
@@ -125,70 +34,111 @@
                     </select>
                 </div>
                 <div class="field">
-                    <label>From</label>
-                    <input type="date" name="start" value="{{ filters.start or '' }}" />
+                    <label for="f_start">From</label>
+                    <input type="date" name="start" id="f_start" value="{{ filters.start or '' }}" />
                 </div>
                 <div class="field">
-                    <label>To</label>
-                    <input type="date" name="end" value="{{ filters.end or '' }}" />
+                    <label for="f_end">To</label>
+                    <input type="date" name="end" id="f_end" value="{{ filters.end or '' }}" />
                 </div>
                 <div class="field">
-                    <label>Sort</label>
-                    <select name="sort">
+                    <label for="f_sort">Sort</label>
+                    <select name="sort" id="f_sort">
+                        <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
+                        <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
                         <option value="score_desc" {% if filters.sort == 'score_desc' %}selected{% endif %}>Score ↓</option>
                         <option value="score_asc" {% if filters.sort == 'score_asc' %}selected{% endif %}>Score ↑</option>
                         <option value="comments_desc" {% if filters.sort == 'comments_desc' %}selected{% endif %}>Comments ↓</option>
                         <option value="comments_asc" {% if filters.sort == 'comments_asc' %}selected{% endif %}>Comments ↑</option>
-                        <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
-                        <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
                     </select>
                 </div>
                 <div class="field">
-                    <label>Limit</label>
-                    <select name="limit">
-                        <option value="50" {% if filters.limit == 50 %}selected{% endif %}>50</option>
-                        <option value="100" {% if filters.limit == 100 %}selected{% endif %}>100</option>
-                        <option value="200" {% if filters.limit == 200 %}selected{% endif %}>200</option>
-                        <option value="500" {% if filters.limit == 500 %}selected{% endif %}>500</option>
+                    <label for="f_limit">Limit</label>
+                    <select name="limit" id="f_limit">
+                        {% for l in [25, 50, 100, 200, 500] %}
+                        <option value="{{ l }}" {% if filters.limit == l %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
                     </select>
                 </div>
                 <div class="field">
-                    <label>Search title</label>
-                    <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="filter..." />
+                    <label for="f_q">Search</label>
+                    <input type="text" name="q" id="f_q" value="{{ filters.q or '' }}" placeholder="title…" />
                 </div>
                 <button type="submit">Apply</button>
             </form>
         </div>
+
         {% if total > 0 %}
-        <p class="sort-indicator">Showing {{ total }} post(s)</p>
-        {% for post in posts %}
-        <div class="post-card">
-            <div class="title">
-                <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
-            </div>
-            <div>
-                <a href="/posts?subreddit={{ post.subreddit }}" class="badge">r/{{ post.subreddit }}</a>
+        <p class="sort-indicator">Showing <strong>{{ total }}</strong> post(s) — page {{ page }} of {{ total_pages }}</p>
+
+        <div class="posts-list">
+            {% for post in posts %}
+            <div class="post-card" data-id="{{ post.id }}">
+                <div class="title">
+                    <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
+                    <div style="margin-top:0.3rem;">
+                        <a href="/posts?subreddit={{ post.subreddit }}" class="badge">r/{{ post.subreddit }}</a>
+                    </div>
+                </div>
                 <div class="meta">
                     <span><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
                     <span><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
-                    <span>{{ post.created_utc | datetimeformat }}</span>
+                    <span>{{ post.created_utc|datetimeformat }}</span>
                 </div>
+                <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-bookmarked{% endif %}" data-post-id="{{ post.id }}" title="Bookmark">
+                    <i class="fa-solid fa-bookmark"></i>
+                </button>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
-        {% else %}
-        <div class="no-posts">No posts found. <a href="/">Go back</a> or run <code>python scraper.py</code>.</div>
+
+        {% if total_pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="/posts?{{ query_params(page - 1, filters) }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+            {% else %}
+            <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
+            {% endif %}
+            {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}
+                <span class="current">{{ p }}</span>
+                {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
+                <a href="/posts?{{ query_params(p, filters) }}">{{ p }}</a>
+                {% endif %}
+            {% endfor %}
+            {% if page < total_pages %}
+            <a href="/posts?{{ query_params(page + 1, filters) }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+            {% else %}
+            <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
         {% endif %}
-        <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
+        {% else %}
+        <div class="no-posts">
+            <p>No posts found.</p>
+            <a href="/">Go back</a> or run <code>python scraper.py</code>.
+        </div>
+        {% endif %}
     </main>
+
+    <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
+
     <script>
-        function formatDate(ts) {
-            if (!ts) return '';
-            const d = new Date(ts * 1000);
-            return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-        }
-        document.querySelectorAll('[name="subreddit"]').forEach(el => {
-            el.addEventListener('change', () => el.closest('form').submit());
+        document.querySelectorAll('.bookmark-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const postId = btn.dataset.postId;
+                const icon = btn.querySelector('i');
+                const isBookmarked = btn.classList.contains('is-bookmarked');
+                try {
+                    if (isBookmarked) {
+                        await fetch(`/bookmarks/${postId}`, { method: 'DELETE' });
+                        btn.classList.remove('is-bookmarked');
+                    } else {
+                        await fetch(`/bookmarks/${postId}`, { method: 'POST' });
+                        btn.classList.add('is-bookmarked');
+                    }
+                } catch (e) { console.error('Bookmark toggle failed:', e); }
+            });
         });
     </script>
 </body>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>RedFetcher v2 — Bookmarks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+    <header>
+        <div class="logo">Red<span class="accent">F</span>etcher v2</div>
+        <nav>
+            <a href="/">Subreddits</a>
+            <a href="/posts">Posts</a>
+            <a href="/bookmarks" class="active">Bookmarks</a>
+        </nav>
+        <div class="total-count">{{ total_posts }} posts</div>
+    </header>
+
+    <main>
+        <div class="bookmarks-header">
+            <h2>Bookmarks</h2>
+            <span class="bookmark-count">{{ total }} bookmark(s)</span>
+        </div>
+
+        <div class="filter-bar">
+            <form method="get" action="/bookmarks" style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:flex-end; width:100%;">
+                <div class="field">
+                    <label for="f_subreddit">Subreddit</label>
+                    <select name="subreddit" id="f_subreddit">
+                        <option value="">All</option>
+                        {% for s in all_subreddits %}
+                        <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="f_sort">Sort</label>
+                    <select name="sort" id="f_sort">
+                        <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest bookmarked</option>
+                        <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest bookmarked</option>
+                        <option value="score_desc" {% if filters.sort == 'score_desc' %}selected{% endif %}>Score ↓</option>
+                        <option value="score_asc" {% if filters.sort == 'score_asc' %}selected{% endif %}>Score ↑</option>
+                        <option value="comments_desc" {% if filters.sort == 'comments_desc' %}selected{% endif %}>Comments ↓</option>
+                        <option value="comments_asc" {% if filters.sort == 'comments_asc' %}selected{% endif %}>Comments ↑</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="f_limit">Limit</label>
+                    <select name="limit" id="f_limit">
+                        {% for l in [25, 50, 100, 200, 500] %}
+                        <option value="{{ l }}" {% if filters.limit == l %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit">Apply</button>
+            </form>
+        </div>
+
+        {% if total > 0 %}
+        <p class="sort-indicator">Showing <strong>{{ total }}</strong> bookmark(s) — page {{ page }} of {{ total_pages }}</p>
+
+        <div class="posts-list">
+            {% for post in posts %}
+            <div class="post-card" data-id="{{ post.id }}">
+                <div class="title">
+                    <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
+                    <div style="margin-top:0.3rem;">
+                        <a href="/posts?subreddit={{ post.subreddit }}" class="badge">r/{{ post.subreddit }}</a>
+                        <span class="text-xs text-muted" style="margin-left:0.5rem;">bookmarked {{ post.bookmarked_at|datetimeformat }}</span>
+                    </div>
+                </div>
+                <div class="meta">
+                    <span><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
+                    <span><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
+                    <span>{{ post.created_utc|datetimeformat }}</span>
+                </div>
+                <button class="bookmark-btn is-bookmarked" data-post-id="{{ post.id }}" title="Remove bookmark">
+                    <i class="fa-solid fa-bookmark"></i>
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if total_pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="/bookmarks?{{ query_params(page - 1, filters) }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+            {% else %}
+            <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
+            {% endif %}
+            {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}
+                <span class="current">{{ p }}</span>
+                {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
+                <a href="/bookmarks?{{ query_params(p, filters) }}">{{ p }}</a>
+                {% endif %}
+            {% endfor %}
+            {% if page < total_pages %}
+            <a href="/bookmarks?{{ query_params(page + 1, filters) }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+            {% else %}
+            <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="no-posts">
+            <p>No bookmarks yet.</p>
+            <a href="/posts">Browse posts to bookmark some →</a>
+        </div>
+        {% endif %}
+    </main>
+
+    <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
+
+    <script>
+        document.querySelectorAll('.bookmark-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const postId = btn.dataset.postId;
+                try {
+                    await fetch(`/bookmarks/${postId}`, { method: 'DELETE' });
+                    btn.closest('.post-card').style.opacity = '0.4';
+                    btn.closest('.post-card').style.transition = 'opacity 0.3s';
+                    setTimeout(() => btn.closest('.post-card').remove(), 300);
+                } catch (e) { console.error('Bookmark remove failed:', e); }
+            });
+        });
+    </script>
+</body>
+</html>

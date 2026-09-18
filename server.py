@@ -1,12 +1,13 @@
 import logging
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from datetime import datetime
 import config
 import database
 
-# ── Logging ──────────────────────────────────────────────────────────
+# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -16,6 +17,7 @@ log = logging.getLogger("redfetcher")
 
 app = FastAPI(title="RedFetcher v2")
 templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="templates/static"), name="static")
 
 
 def format_date(value):
@@ -30,11 +32,46 @@ def format_date(value):
 templates.env.filters["datetimeformat"] = format_date
 
 
+def query_params(page, filters=None):
+    """Build a query string preserving current filters with a new page number."""
+    from urllib.parse import urlencode
+    params = {}
+    if filters:
+        for k, v in filters.items():
+            if v is not None and v != "":
+                params[k] = str(v)
+    params["page"] = str(page)
+    return urlencode(params)
+
+
+templates.env.globals["query_params"] = query_params
+templates.env.globals["abs"] = abs
+
+
+# ── Shared context ───────────────────────────────────────────
+
+def build_template_context(request: Request, extra=None):
+    ctx = {
+        "request": request,
+        "total_posts": database.get_total_count(),
+        "bookmarked_ids": set(database.get_bookmark_ids()),
+    }
+    if extra:
+        ctx.update(extra)
+    return ctx
+
+
+# ── Routes ───────────────────────────────────────────────────
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     stats = database.get_stats()
+    q = request.query_params.get("q", "")
     log.info(f"GET / — {len(stats)} subreddits served")
-    return templates.TemplateResponse(request, "index.html", {"stats": stats})
+    return templates.TemplateResponse(
+        request, "index.html",
+        build_template_context(request, {"stats": stats, "q": q})
+    )
 
 
 @app.get("/posts", response_class=HTMLResponse)
@@ -43,28 +80,32 @@ async def posts(
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
-    sort: str = Query("score_desc"),
-    limit: int = Query(100),
+    sort: str = Query("oldest"),
+    limit: int = Query(50),
     q: str = Query(None),
+    page: int = Query(1, ge=1),
 ):
-    results = database.get_posts(
+    results, total = database.get_posts(
         subreddit=subreddit, start_date=start, end_date=end,
-        sort=sort, limit=limit, q=q,
+        sort=sort, limit=limit, q=q, page=page,
     )
     all_subreddits = database.get_all_subreddits()
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
     log.info(
         f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
-        f"q={'yes' if q else 'no'}, results={len(results)}"
+        f"page={page}, q={'yes' if q else 'no'}, results={len(results)}, total={total}"
     )
     return templates.TemplateResponse(
         request,
         "posts.html",
-        {
+        build_template_context(request, {
             "posts": results,
             "filters": {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q},
             "all_subreddits": all_subreddits,
-            "total": len(results),
-        },
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+        }),
     )
 
 
@@ -73,13 +114,14 @@ async def api_posts(
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
-    sort: str = Query("score_desc"),
-    limit: int = Query(100),
+    sort: str = Query("oldest"),
+    limit: int = Query(50),
     q: str = Query(None),
+    page: int = Query(1, ge=1),
 ):
-    results = database.get_posts(subreddit, start, end, sort, limit, q)
+    results, total = database.get_posts(subreddit, start, end, sort, limit, q, page)
     log.info(f"GET /api/posts — {len(results)} posts returned")
-    return results
+    return {"posts": results, "total": total}
 
 
 @app.get("/stats")
@@ -88,6 +130,49 @@ async def stats():
     log.info(f"GET /stats — {len(data)} subreddits")
     return data
 
+
+@app.get("/bookmarks", response_class=HTMLResponse)
+async def bookmarks(
+    request: Request,
+    sort: str = Query("oldest"),
+    limit: int = Query(50),
+    page: int = Query(1, ge=1),
+    subreddit: str = Query(None),
+):
+    results = database.get_bookmarks(limit=limit, offset=(page - 1) * limit, sort=sort, subreddit=subreddit)
+    total = database.get_bookmarks_count(subreddit=subreddit)
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    all_subreddits = database.get_all_subreddits()
+    log.info(f"GET /bookmarks — sort={sort}, page={page}, total={total}")
+    return templates.TemplateResponse(
+        request,
+        "bookmarks.html",
+        build_template_context(request, {
+            "posts": results,
+            "filters": {"sort": sort, "limit": limit, "subreddit": subreddit},
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+            "all_subreddits": all_subreddits,
+        }),
+    )
+
+
+@app.post("/bookmarks/{post_id}")
+async def add_bookmark(post_id: str):
+    database.add_bookmark(post_id)
+    log.info(f"POST /bookmarks/{post_id} — bookmark added")
+    return JSONResponse({"status": "bookmarked", "post_id": post_id})
+
+
+@app.delete("/bookmarks/{post_id}")
+async def remove_bookmark(post_id: str):
+    database.remove_bookmark(post_id)
+    log.info(f"DELETE /bookmarks/{post_id} — bookmark removed")
+    return JSONResponse({"status": "unbookmarked", "post_id": post_id})
+
+
+# ── Entry point ──────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn

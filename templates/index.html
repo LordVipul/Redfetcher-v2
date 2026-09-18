@@ -5,147 +5,53 @@
     <title>RedFetcher v2</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <style>
-        :root {
-            --bg: #0a0a0a;
-            --surface: #141414;
-            --border: #2a2a2a;
-            --accent: #b43131;
-            --text-primary: #e0e0e0;
-            --text-secondary: #888;
-            --link-visited: #ff5e5e;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: "Inter", system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text-primary);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        a:visited { color: var(--link-visited); }
-        header {
-            background: var(--accent);
-            color: #fff;
-            padding: 0.8rem 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        header h1 { font-family: "Montserrat", sans-serif; font-size: 1.6rem; margin: 0; }
-        main { flex: 1; max-width: 900px; margin: 0 auto; padding: 1.5rem; width: 100%; }
-        h2 { color: var(--accent); margin-bottom: 1rem; }
-        .stat-card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem 1.5rem;
-            margin-bottom: 0.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .stat-card .count { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
-        .stat-card .subreddit-name { font-size: 1rem; }
-        .stat-card .last-updated { font-size: 0.8rem; color: var(--text-secondary); }
-        .btn {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 6px;
-            padding: 0.5rem 1rem;
-            cursor: pointer;
-            font-size: 0.9rem;
-        }
-        .btn:hover { opacity: 0.85; }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-secondary {
-            background: var(--surface);
-            color: var(--accent);
-            border: 1px solid var(--accent);
-        }
-        .filter-bar {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-            align-items: center;
-        }
-        .filter-bar select, .filter-bar input {
-            background: var(--bg);
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.4rem 0.6rem;
-            font-size: 0.9rem;
-        }
-        .filter-bar label { font-size: 0.8rem; color: var(--text-secondary); }
-        .post-card {
-            background: var(--surface);
-            border-left: 4px solid var(--accent);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 0.75rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-        .post-card .title { flex: 1; }
-        .post-card .title a { font-weight: 500; color: var(--accent); }
-        .post-card .meta { font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 1rem; flex-wrap: wrap; }
-        .post-card .meta i { margin-right: 0.2rem; }
-        .badge {
-            background: var(--accent);
-            color: #fff;
-            font-size: 0.7rem;
-            padding: 0.15rem 0.5rem;
-            border-radius: 4px;
-            text-decoration: none;
-        }
-        .badge:hover { opacity: 0.85; }
-        .no-posts { color: var(--text-secondary); padding: 2rem; text-align: center; }
-        footer {
-            text-align: center;
-            padding: 1rem;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            border-top: 1px solid var(--border);
-        }
-        .total-count { font-size: 1rem; color: var(--text-secondary); margin-bottom: 1rem; }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
     <header>
-        <h1>RedFetcher v2</h1>
-        <span style="font-size:0.9rem; opacity:0.85;">Reddit Post Archiver</span>
+        <div class="logo">Red<span class="accent">F</span>etcher v2</div>
+        <nav>
+            <a href="/" class="active">Subreddits</a>
+            <a href="/posts">Posts</a>
+            <a href="/bookmarks">Bookmarks</a>
+        </nav>
+        <div class="total-count">{{ total_posts }} posts</div>
     </header>
+
     <main>
-        <h2>Subreddits</h2>
-        {% for s in stats %}
-        <div class="stat-card">
-            <div>
-                <span class="subreddit-name">r/{{ s.subreddit }}</span>
-                <span class="last-updated"> — last updated: {{ s.last_updated | datetimeformat }}</span>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.75rem;">
-                <span class="count">{{ s.count }} posts</span>
-                <a href="/posts?subreddit={{ s.subreddit }}" class="btn btn-secondary">View</a>
-            </div>
+        {% if stats|length > 0 %}
+        <div class="hero-stat">
+            <strong>{{ total_posts|default(0) }}</strong> posts across {{ stats|length }} subreddits
         </div>
-        {% endfor %}
-        {% if stats|length == 0 %}
-        <p style="color: var(--text-secondary);">No data yet. Run <code>python scraper.py</code> to start scraping.</p>
+
+        <div class="quick-search">
+            <form method="get" action="/">
+                <input type="text" name="q" placeholder="Search subreddits…" value="{{ q or '' }}" />
+            </form>
+        </div>
+
+        <div class="cards-grid">
+            {% for s in stats %}
+            <a href="/posts?subreddit={{ s.subreddit }}" class="subreddit-card">
+                <span class="sub-name">r/{{ s.subreddit }}</span>
+                <span class="sub-count">{{ s.count }} <small>posts</small></span>
+                <span class="sub-meta">updated {{ s.last_updated|datetimeformat }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h2>No subreddits scraped yet</h2>
+            <p>Run the scraper from your terminal to start archiving.</p>
+            <div class="command">
+                <code>python scraper.py</code>
+            </div>
+            <p style="margin-top:1rem; font-size:0.8rem;">Once scraping starts, subreddits and posts will appear here.</p>
+        </div>
         {% endif %}
-        <p class="total-count">Total: {{ stats|sum(attribute='count') }} posts</p>
-        <p><a href="/posts">View all posts →</a></p>
-        <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
     </main>
+
+    <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
 </body>
 </html>
