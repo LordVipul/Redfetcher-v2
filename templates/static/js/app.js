@@ -54,7 +54,7 @@
         if (filters.q) params.set('q', filters.q);
         if (filters.limit) params.set('limit', filters.limit);
         params.set('page', filters.page || 1);
-        return '/posts?' + params.toString();
+        return pageBase + '?' + params.toString();
     }
 
     // ── Toast (expose globally for bookmark.js) ────
@@ -106,12 +106,14 @@
 
     // ── Posts Page: Live Filtering ─────────────────
     if (document.getElementById('filter-bar')) {
+        var isBookmarks = window.location.pathname === '/bookmarks';
+        var apiBase = isBookmarks ? '/api/bookmarks' : '/api/posts';
+        var pageBase = isBookmarks ? '/bookmarks' : '/posts';
         var filters = Object.assign(
             { subreddit: '', sort: 'oldest', start: '', end: '', q: '', limit: 50, page: 1 },
             window.__filters || {}
         );
         var total = window.__total || 0;
-        var limit = filters.limit;
 
         function getTotalPages(t, l) { return l > 0 ? Math.ceil(t / l) : 1; }
 
@@ -148,7 +150,8 @@
         function updateSortInfo(t, page, tp) {
             var info = document.getElementById('sort-info');
             if (!info) return;
-            info.innerHTML = '<strong>' + t + '</strong> post' + (t !== 1 ? 's' : '') + ' &middot; page ' + page + ' of ' + tp;
+            var label = isBookmarks ? 'bookmark' : 'post';
+            info.innerHTML = '<strong>' + t + '</strong> ' + label + (t !== 1 ? 's' : '') + ' &middot; page ' + page + ' of ' + tp;
         }
 
         function updatePagination(page, tp, filters) {
@@ -185,7 +188,7 @@
 
         function fetchAndUpdate(page) {
             var f = Object.assign({}, filters, { page: page || 1 });
-            var url = '/api/posts?' + new URLSearchParams({
+            var url = apiBase + '?' + new URLSearchParams({
                 subreddit: f.subreddit || '',
                 sort: f.sort || 'oldest',
                 start: f.start || '',
@@ -203,7 +206,7 @@
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
                     total = data.total;
-                    var tp = getTotalPages(total, limit);
+                    var tp = getTotalPages(total, f.limit);
                     renderFeed(data.posts, window.__bookmarked || []);
                     updateSortInfo(total, f.page, tp);
                     updatePagination(f.page, tp, f);
@@ -214,6 +217,15 @@
         function onFilterChange(page) {
             filters.page = page || 1;
             fetchAndUpdate(filters.page);
+        }
+
+        // Prevent form submission — let JS handle filtering via fetch
+        var filterForm = document.getElementById('filter-form');
+        if (filterForm) {
+            filterForm.addEventListener('submit', function (e) {
+                e.preventDefault();
+                onFilterChange(1);
+            });
         }
 
         // Attach filter listeners
@@ -232,10 +244,15 @@
         // Pagination: intercept clicks
         document.addEventListener('click', function (e) {
             var link = e.target.closest('.js-page[data-page]');
-            if (!link) return;
-            e.preventDefault();
-            var page = parseInt(link.dataset.page);
-            if (page > 0) onFilterChange(page);
+            if (link) {
+                e.preventDefault();
+                var page = parseInt(link.dataset.page);
+                if (page > 0) onFilterChange(page);
+            }
+            var jump = document.getElementById('jump-page');
+            if (jump && (e.target.closest('.pagination a') || e.target.closest('.js-page'))) {
+                jump.value = '';
+            }
         });
 
         // Jump to page
@@ -244,7 +261,7 @@
             jumpInput.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter') {
                     var page = parseInt(jumpInput.value);
-                    var tp = getTotalPages(total, limit);
+                    var tp = getTotalPages(total, filters.limit);
                     if (page > 0 && page <= tp) onFilterChange(page);
                 }
             });

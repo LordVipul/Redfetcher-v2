@@ -180,7 +180,7 @@ def get_bookmark_ids():
     return [r["post_id"] for r in rows]
 
 
-def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None):
+def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=None, end_date=None, q=None):
     conn = get_connection()
     query = """
         SELECT p.*, b.created_at as bookmarked_at
@@ -193,6 +193,15 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None):
     if subreddit:
         query += " AND p.subreddit = ?"
         params.append(subreddit)
+    if start_date:
+        query += " AND p.created_utc >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND p.created_utc <= ?"
+        params.append(end_date)
+    if q:
+        query += " AND p.title LIKE ?"
+        params.append(f"%{q}%")
 
     sort_map = {
         "oldest": "b.created_at ASC",
@@ -212,13 +221,22 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None):
     return [dict(r) for r in rows]
 
 
-def get_bookmarks_count(subreddit=None):
+def get_bookmarks_count(subreddit=None, start_date=None, end_date=None, q=None):
     conn = get_connection()
     query = "SELECT COUNT(*) FROM bookmarks b INNER JOIN posts p ON p.id = b.post_id WHERE 1=1"
     params = []
     if subreddit:
         query += " AND p.subreddit = ?"
         params.append(subreddit)
+    if start_date:
+        query += " AND p.created_utc >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND p.created_utc <= ?"
+        params.append(end_date)
+    if q:
+        query += " AND p.title LIKE ?"
+        params.append(f"%{q}%")
     total = conn.execute(query, params).fetchone()[0]
     conn.close()
     return total

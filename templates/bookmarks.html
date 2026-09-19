@@ -2,6 +2,13 @@
 {% block title %}Bookmarks{% endblock %}
 {% block head %}
 <style>.header-search { display: none; }</style>
+<script>
+window.__filters = {{ filters|tojson }};
+window.__total = {{ total }};
+window.__page = {{ page }};
+window.__total_pages = {{ total_pages }};
+window.__bookmarked = {{ bookmarked_ids|tojson }};
+</script>
 {% endblock %}
 {% block content %}
 <div class="bookmarks-bar">
@@ -9,11 +16,11 @@
     <span class="count">{{ total }} saved</span>
 </div>
 
-<div class="filter-bar">
-    <form method="get" action="/bookmarks">
+<div class="filter-bar" id="filter-bar">
+    <form id="filter-form" action="/bookmarks" method="get">
         <div class="field">
             <label>Sub</label>
-            <select name="subreddit">
+            <select name="subreddit" id="filter-subreddit">
                 <option value="">All</option>
                 {% for s in all_subreddits %}
                 <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
@@ -22,7 +29,7 @@
         </div>
         <div class="field">
             <label>Sort</label>
-            <select name="sort">
+            <select name="sort" id="filter-sort">
                 <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
                 <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
                 <option value="score_desc" {% if filters.sort == 'score_desc' %}selected{% endif %}>Score ↓</option>
@@ -32,21 +39,24 @@
             </select>
         </div>
         <div class="field">
-            <label>Limit</label>
-            <select name="limit">
-                {% for l in [25, 50, 100, 200, 500] %}
-                <option value="{{ l }}" {% if filters.limit == l %}selected{% endif %}>{{ l }}</option>
-                {% endfor %}
-            </select>
+            <label>From</label>
+            <input type="date" name="start" id="filter-start" value="{{ filters.start or '' }}" />
         </div>
-        <button type="submit" class="btn-apply">Apply</button>
+        <div class="field">
+            <label>To</label>
+            <input type="date" name="end" id="filter-end" value="{{ filters.end or '' }}" />
+        </div>
+        <div class="field field-search">
+            <label>Search</label>
+            <input type="text" name="q" id="filter-q" placeholder="title…" value="{{ filters.q or '' }}" />
+        </div>
     </form>
 </div>
 
 {% if total > 0 %}
-<p class="sort-info"><strong>{{ total }}</strong> bookmark{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
+<p class="sort-info" id="sort-info"><strong>{{ total }}</strong> bookmark{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
 
-<div class="post-feed">
+<div class="post-feed" id="post-feed">
     {% for post in posts %}
     <div class="post-item" data-post-id="{{ post.id }}">
         <a href="/posts?subreddit={{ post.subreddit }}" class="r-badge">r/{{ post.subreddit }}</a>
@@ -66,9 +76,9 @@
 </div>
 
 {% if total_pages > 1 %}
-<div class="pagination">
+<div class="pagination" id="pagination">
     {% if page > 1 %}
-    <a href="/bookmarks?{{ query_params(page - 1, filters) }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+    <a href="#" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
     {% else %}
     <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
     {% endif %}
@@ -76,7 +86,7 @@
         {% if p == page %}
         <span class="current">{{ p }}</span>
         {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
-        <a href="/bookmarks?{{ query_params(p, filters) }}">{{ p }}</a>
+        <a href="#" class="js-page" data-page="{{ p }}">{{ p }}</a>
         {% else %}
         {% if p == 2 or p == total_pages - 1 %}
         <span class="disabled">&hellip;</span>
@@ -88,7 +98,7 @@
         <a href="#" class="jump-link" id="jump-link"><i class="fa-solid fa-arrow-right"></i></a>
     </div>
     {% if page < total_pages %}
-    <a href="/bookmarks?{{ query_params(page + 1, filters) }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+    <a href="#" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
     {% else %}
     <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
     {% endif %}
@@ -101,32 +111,4 @@
     <p>Browse the <a href="/posts">posts feed</a> and save what interests you.</p>
 </div>
 {% endif %}
-{% endblock %}
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    var jump = document.getElementById('jump-page');
-    var jumpLink = document.getElementById('jump-link');
-    if (jump) {
-        jump.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') {
-                var p = parseInt(jump.value);
-                var tp = {{ total_pages }};
-                if (p > 0 && p <= tp) window.location.href = '/bookmarks?page=' + p;
-            }
-        });
-    }
-    if (jumpLink) {
-        jumpLink.addEventListener('click', function (e) {
-            e.preventDefault();
-            var p = parseInt(jump.value);
-            var tp = {{ total_pages }};
-            if (p > 0 && p <= tp) window.location.href = '/bookmarks?page=' + p;
-        });
-    }
-    document.querySelectorAll('.pagination a').forEach(function (a) {
-        a.addEventListener('click', function () { if (jump) jump.value = ''; });
-    });
-});
-</script>
 {% endblock %}

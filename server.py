@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import logging
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -34,7 +36,6 @@ templates.env.filters["datetimeformat"] = format_date
 
 def query_params(page, filters=None):
     """Build a query string preserving current filters with a new page number."""
-    from urllib.parse import urlencode
     params = {}
     if filters:
         for k, v in filters.items():
@@ -45,8 +46,6 @@ def query_params(page, filters=None):
 
 
 templates.env.globals["query_params"] = query_params
-
-
 # ── Shared context ───────────────────────────────────────────
 
 def build_template_context(request: Request, extra=None):
@@ -86,7 +85,7 @@ async def posts(
         sort=sort, limit=limit, q=q, page=page,
     )
     all_subreddits = database.get_all_subreddits()
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     log.info(
         f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
         f"page={page}, q={'yes' if q else 'no'}, results={len(results)}, total={total}"
@@ -134,24 +133,53 @@ async def bookmarks(
     limit: int = Query(50),
     page: int = Query(1, ge=1),
     subreddit: str = Query(None),
+    start: str = Query(None),
+    end: str = Query(None),
+    q: str = Query(None),
 ):
-    results = database.get_bookmarks(limit=limit, offset=(page - 1) * limit, sort=sort, subreddit=subreddit)
-    total = database.get_bookmarks_count(subreddit=subreddit)
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    results = database.get_bookmarks(
+        limit=limit, offset=(page - 1) * limit, sort=sort,
+        subreddit=subreddit, start_date=start, end_date=end, q=q,
+    )
+    total = database.get_bookmarks_count(
+        subreddit=subreddit, start_date=start, end_date=end, q=q,
+    )
+    total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     all_subreddits = database.get_all_subreddits()
-    log.info(f"GET /bookmarks — sort={sort}, page={page}, total={total}")
+    log.info(f"GET /bookmarks — subreddit={subreddit}, sort={sort}, q={'yes' if q else 'no'}, page={page}, total={total}")
     return templates.TemplateResponse(
         request,
         "bookmarks.html",
         build_template_context(request, {
             "posts": results,
-            "filters": {"sort": sort, "limit": limit, "subreddit": subreddit},
+            "filters": {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q},
             "total": total,
             "page": page,
             "total_pages": total_pages,
             "all_subreddits": all_subreddits,
         }),
     )
+
+
+@app.get("/api/bookmarks")
+async def api_bookmarks(
+    subreddit: str = Query(None),
+    start: str = Query(None),
+    end: str = Query(None),
+    sort: str = Query("oldest"),
+    limit: int = Query(50),
+    q: str = Query(None),
+    page: int = Query(1, ge=1),
+):
+    results = database.get_bookmarks(
+        limit=limit, offset=(page - 1) * limit, sort=sort,
+        subreddit=subreddit, start_date=start, end_date=end, q=q,
+    )
+    total = database.get_bookmarks_count(
+        subreddit=subreddit, start_date=start, end_date=end, q=q,
+    )
+    log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
+    return {"posts": results, "total": total}
 
 
 @app.post("/bookmarks/{post_id}")
