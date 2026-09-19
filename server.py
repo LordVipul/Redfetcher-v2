@@ -45,7 +45,6 @@ def query_params(page, filters=None):
 
 
 templates.env.globals["query_params"] = query_params
-templates.env.globals["abs"] = abs
 
 
 # ── Shared context ───────────────────────────────────────────
@@ -53,8 +52,7 @@ templates.env.globals["abs"] = abs
 def build_template_context(request: Request, extra=None):
     ctx = {
         "request": request,
-        "total_posts": database.get_total_count(),
-        "bookmarked_ids": set(database.get_bookmark_ids()),
+        "bookmarked_ids": list(database.get_bookmark_ids()),
     }
     if extra:
         ctx.update(extra)
@@ -66,11 +64,9 @@ def build_template_context(request: Request, extra=None):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     stats = database.get_stats()
-    q = request.query_params.get("q", "")
-    log.info(f"GET / — {len(stats)} subreddits served")
     return templates.TemplateResponse(
         request, "index.html",
-        build_template_context(request, {"stats": stats, "q": q})
+        build_template_context(request, {"stats": stats})
     )
 
 

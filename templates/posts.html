@@ -1,145 +1,115 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8" />
-    <title>RedFetcher v2 — Posts</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
-    <header>
-        <div class="logo">Red<span class="accent">F</span>etcher v2</div>
-        <nav>
-            <a href="/">Subreddits</a>
-            <a href="/posts" class="active">Posts</a>
-            <a href="/bookmarks">Bookmarks</a>
-        </nav>
-        <div class="total-count">{{ total_posts }} posts</div>
-    </header>
+{% extends "base.html" %}
+{% block title %}Posts{% endblock %}
+{% block head %}
+<style>.header-search { display: none; }</style>
+{% endblock %}
+{% block content %}
+<h1 class="page-title">Posts</h1>
 
-    <main>
-        <h2>Posts</h2>
-
-        <div class="filter-bar">
-            <form method="get" action="/posts" style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:flex-end; width:100%;">
-                <div class="field">
-                    <label for="f_subreddit">Subreddit</label>
-                    <select name="subreddit" id="f_subreddit">
-                        <option value="">All</option>
-                        {% for s in all_subreddits %}
-                        <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="field">
-                    <label for="f_start">From</label>
-                    <input type="date" name="start" id="f_start" value="{{ filters.start or '' }}" />
-                </div>
-                <div class="field">
-                    <label for="f_end">To</label>
-                    <input type="date" name="end" id="f_end" value="{{ filters.end or '' }}" />
-                </div>
-                <div class="field">
-                    <label for="f_sort">Sort</label>
-                    <select name="sort" id="f_sort">
-                        <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
-                        <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
-                        <option value="score_desc" {% if filters.sort == 'score_desc' %}selected{% endif %}>Score ↓</option>
-                        <option value="score_asc" {% if filters.sort == 'score_asc' %}selected{% endif %}>Score ↑</option>
-                        <option value="comments_desc" {% if filters.sort == 'comments_desc' %}selected{% endif %}>Comments ↓</option>
-                        <option value="comments_asc" {% if filters.sort == 'comments_asc' %}selected{% endif %}>Comments ↑</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label for="f_limit">Limit</label>
-                    <select name="limit" id="f_limit">
-                        {% for l in [25, 50, 100, 200, 500] %}
-                        <option value="{{ l }}" {% if filters.limit == l %}selected{% endif %}>{{ l }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="field">
-                    <label for="f_q">Search</label>
-                    <input type="text" name="q" id="f_q" value="{{ filters.q or '' }}" placeholder="title…" />
-                </div>
-                <button type="submit">Apply</button>
-            </form>
+<div class="filter-bar" id="filter-bar">
+    <form id="filter-form" action="/posts" method="get">
+        <div class="field">
+            <label>Sub</label>
+            <select name="subreddit" id="filter-subreddit">
+                <option value="">All</option>
+                {% for s in all_subreddits %}
+                <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
         </div>
-
-        {% if total > 0 %}
-        <p class="sort-indicator">Showing <strong>{{ total }}</strong> post(s) — page {{ page }} of {{ total_pages }}</p>
-
-        <div class="posts-list">
-            {% for post in posts %}
-            <div class="post-card" data-id="{{ post.id }}">
-                <div class="title">
-                    <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
-                    <div style="margin-top:0.3rem;">
-                        <a href="/posts?subreddit={{ post.subreddit }}" class="badge">r/{{ post.subreddit }}</a>
-                    </div>
-                </div>
-                <div class="meta">
-                    <span><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
-                    <span><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
-                    <span>{{ post.created_utc|datetimeformat }}</span>
-                </div>
-                <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-bookmarked{% endif %}" data-post-id="{{ post.id }}" title="Bookmark">
-                    <i class="fa-solid fa-bookmark"></i>
-                </button>
-            </div>
-            {% endfor %}
+        <div class="field">
+            <label>Sort</label>
+            <select name="sort" id="filter-sort">
+                <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
+                <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
+                <option value="score_desc" {% if filters.sort == 'score_desc' %}selected{% endif %}>Score ↓</option>
+                <option value="score_asc" {% if filters.sort == 'score_asc' %}selected{% endif %}>Score ↑</option>
+                <option value="comments_desc" {% if filters.sort == 'comments_desc' %}selected{% endif %}>Comments ↓</option>
+                <option value="comments_asc" {% if filters.sort == 'comments_asc' %}selected{% endif %}>Comments ↑</option>
+            </select>
         </div>
-
-        {% if total_pages > 1 %}
-        <div class="pagination">
-            {% if page > 1 %}
-            <a href="/posts?{{ query_params(page - 1, filters) }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
-            {% else %}
-            <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
-            {% endif %}
-            {% for p in range(1, total_pages + 1) %}
-                {% if p == page %}
-                <span class="current">{{ p }}</span>
-                {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
-                <a href="/posts?{{ query_params(p, filters) }}">{{ p }}</a>
-                {% endif %}
-            {% endfor %}
-            {% if page < total_pages %}
-            <a href="/posts?{{ query_params(page + 1, filters) }}">Next <i class="fa-solid fa-chevron-right"></i></a>
-            {% else %}
-            <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
-            {% endif %}
+        <div class="field">
+            <label>From</label>
+            <input type="date" name="start" id="filter-start" value="{{ filters.start or '' }}" />
         </div>
-        {% endif %}
+        <div class="field">
+            <label>To</label>
+            <input type="date" name="end" id="filter-end" value="{{ filters.end or '' }}" />
+        </div>
+        <div class="field field-search">
+            <label>Search</label>
+            <input type="text" name="q" id="filter-q" placeholder="title…" value="{{ filters.q or '' }}" />
+        </div>
+    </form>
+</div>
+
+{% if total > 0 %}
+<p class="sort-info" id="sort-info"><strong>{{ total }}</strong> post{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
+
+<div class="post-feed" id="post-feed">
+    {% for post in posts %}
+    <div class="post-item" data-post-id="{{ post.id }}">
+        <a href="/posts?subreddit={{ post.subreddit }}" class="r-badge">r/{{ post.subreddit }}</a>
+        <div class="post-title">
+            <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
+        </div>
+        <span class="post-date">{{ post.created_utc|datetimeformat }}</span>
+        <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
+        <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
+        <span class="r-action">
+            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark">
+                <i class="fa-solid fa-bookmark"></i>
+            </button>
+        </span>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="pagination" id="pagination">
+    {% if total_pages > 1 %}
+    {% if page > 1 %}
+    <a href="/posts?{{ query_params(page - 1, filters) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+    {% else %}
+    <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
+    {% endif %}
+    {% for p in range(1, total_pages + 1) %}
+        {% if p == page %}
+        <span class="current">{{ p }}</span>
+        {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
+        <a href="/posts?{{ query_params(p, filters) }}" class="js-page" data-page="{{ p }}">{{ p }}</a>
         {% else %}
-        <div class="no-posts">
-            <p>No posts found.</p>
-            <a href="/">Go back</a> or run <code>python scraper.py</code>.
-        </div>
+        {% if p == 2 or p == total_pages - 1 %}
+        <span class="disabled">&hellip;</span>
         {% endif %}
-    </main>
+        {% endif %}
+    {% endfor %}
+    <div class="jump">
+        <input type="number" min="1" max="{{ total_pages }}" placeholder="Go" id="jump-page" />
+        <a href="#" class="jump-link" id="jump-link"><i class="fa-solid fa-arrow-right"></i></a>
+    </div>
+    {% if page < total_pages %}
+    <a href="/posts?{{ query_params(page + 1, filters) }}" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+    {% else %}
+    <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
+    {% endif %}
+    {% endif %}
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="icon"><i class="fa-solid fa-inbox"></i></div>
+    <h2>No posts found</h2>
+    <p>Try different filters or run <code>python scraper.py</code>.</p>
+    <br />
+    <a href="/">Pick a subreddit &rarr;</a>
+</div>
+{% endif %}
 
-    <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
-
-    <script>
-        document.querySelectorAll('.bookmark-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const postId = btn.dataset.postId;
-                const icon = btn.querySelector('i');
-                const isBookmarked = btn.classList.contains('is-bookmarked');
-                try {
-                    if (isBookmarked) {
-                        await fetch(`/bookmarks/${postId}`, { method: 'DELETE' });
-                        btn.classList.remove('is-bookmarked');
-                    } else {
-                        await fetch(`/bookmarks/${postId}`, { method: 'POST' });
-                        btn.classList.add('is-bookmarked');
-                    }
-                } catch (e) { console.error('Bookmark toggle failed:', e); }
-            });
-        });
-    </script>
-</body>
-</html>
+<script>
+window.__filters = {{ filters|tojson }};
+window.__total = {{ total }};
+window.__page = {{ page }};
+window.__total_pages = {{ total_pages }};
+window.__limit = {{ filters.limit }};
+window.__bookmarked = {{ bookmarked_ids|tojson }};
+</script>
+{% endblock %}

@@ -1,57 +1,23 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8" />
-    <title>RedFetcher v2</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
-    <header>
-        <div class="logo">Red<span class="accent">F</span>etcher v2</div>
-        <nav>
-            <a href="/" class="active">Subreddits</a>
-            <a href="/posts">Posts</a>
-            <a href="/bookmarks">Bookmarks</a>
-        </nav>
-        <div class="total-count">{{ total_posts }} posts</div>
-    </header>
-
-    <main>
-        {% if stats|length > 0 %}
-        <div class="hero-stat">
-            <strong>{{ total_posts|default(0) }}</strong> posts across {{ stats|length }} subreddits
-        </div>
-
-        <div class="quick-search">
-            <form method="get" action="/">
-                <input type="text" name="q" placeholder="Search subreddits…" value="{{ q or '' }}" />
-            </form>
-        </div>
-
-        <div class="cards-grid">
-            {% for s in stats %}
-            <a href="/posts?subreddit={{ s.subreddit }}" class="subreddit-card">
-                <span class="sub-name">r/{{ s.subreddit }}</span>
-                <span class="sub-count">{{ s.count }} <small>posts</small></span>
-                <span class="sub-meta">updated {{ s.last_updated|datetimeformat }}</span>
-            </a>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty-state">
-            <h2>No subreddits scraped yet</h2>
-            <p>Run the scraper from your terminal to start archiving.</p>
-            <div class="command">
-                <code>python scraper.py</code>
-            </div>
-            <p style="margin-top:1rem; font-size:0.8rem;">Once scraping starts, subreddits and posts will appear here.</p>
-        </div>
-        {% endif %}
-    </main>
-
-    <footer>RedFetcher v2 — locally run. Data stored in SQLite.</footer>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Subreddits{% endblock %}
+{% block content %}
+{% if stats|length > 0 %}
+<div class="section-label">Communities</div>
+<div class="card-grid">
+    {% for s in stats %}
+    <a href="/posts?subreddit={{ s.subreddit }}" class="community-card">
+        <span class="community-name">r/{{ s.subreddit }}</span>
+        <span class="community-count">{{ s.count }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="icon"><i class="fa-solid fa-cloud-arrow-down"></i></div>
+    <h2>No communities scraped yet</h2>
+    <p>Run <code>python scraper.py</code> to begin.</p>
+    <br />
+    <a href="/posts">Browse posts &rarr;</a>
+</div>
+{% endif %}
+{% endblock %}
