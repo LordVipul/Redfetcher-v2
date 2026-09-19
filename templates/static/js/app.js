@@ -156,7 +156,8 @@
 
         function updatePagination(page, tp, filters) {
             var pag = document.getElementById('pagination');
-            if (!pag || tp <= 1) { if (pag) pag.innerHTML = ''; return; }
+            if (!pag) return;
+            if (tp <= 1) { pag.innerHTML = ''; return; }
 
             var html = '';
             // Prev
@@ -168,7 +169,7 @@
             // Page numbers
             for (var p = 1; p <= tp; p++) {
                 if (p === page) {
-                    html += '<span class="current">' + p + '</span>';
+                    html += '<span class="current" aria-current="page">' + p + '</span>';
                 } else if (p === 1 || p === tp || Math.abs(p - page) <= 2) {
                     html += '<a href="#" class="js-page" data-page="' + p + '">' + p + '</a>';
                 } else {
@@ -183,7 +184,26 @@
             } else {
                 html += '<span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>';
             }
+            // Jump input
+            html += '<div class="jump">';
+            html += '<input type="number" min="1" max="' + tp + '" placeholder="' + tp + '" id="jump-page" />';
+            html += '</div>';
+
             pag.innerHTML = html;
+
+            // Attach jump input handler
+            var jumpInput = document.getElementById('jump-page');
+            if (jumpInput) {
+                jumpInput.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') {
+                        var targetPage = parseInt(jumpInput.value);
+                        if (targetPage > 0 && targetPage <= tp) {
+                            onFilterChange(targetPage);
+                        }
+                        jumpInput.value = '';
+                    }
+                });
+            }
         }
 
         function fetchAndUpdate(page) {

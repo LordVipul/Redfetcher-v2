@@ -46,6 +46,7 @@ def query_params(page, filters=None):
 
 
 templates.env.globals["query_params"] = query_params
+templates.env.globals["abs"] = abs
 # ── Shared context ───────────────────────────────────────────
 
 def build_template_context(request: Request, extra=None):
