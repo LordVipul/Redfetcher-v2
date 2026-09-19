@@ -2,10 +2,10 @@
 {% block title %}Subreddits{% endblock %}
 {% block content %}
 {% if stats|length > 0 %}
-<div class="section-label">Communities</div>
-<div class="card-grid">
+<div class="section-label" role="heading" aria-level="2">Communities</div>
+<div class="card-grid" role="list">
     {% for s in stats %}
-    <a href="/posts?subreddit={{ s.subreddit }}" class="community-card">
+    <a href="/posts?subreddit={{ s.subreddit }}" class="community-card" role="listitem" aria-label="r/{{ s.subreddit }}, {{ s.count }} posts">
         <span class="community-name">r/{{ s.subreddit }}</span>
         <span class="community-count">{{ s.count }}</span>
     </a>

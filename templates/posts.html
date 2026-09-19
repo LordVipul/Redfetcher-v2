@@ -7,9 +7,9 @@
 <h1 class="page-title">Posts</h1>
 
 <div class="filter-bar" id="filter-bar">
-    <form id="filter-form" action="/posts" method="get">
+    <form id="filter-form" action="/posts" method="get" role="search" aria-label="Filter posts">
         <div class="field">
-            <label>Sub</label>
+            <label for="filter-subreddit">Subreddit</label>
             <select name="subreddit" id="filter-subreddit">
                 <option value="">All</option>
                 {% for s in all_subreddits %}
@@ -18,7 +18,7 @@
             </select>
         </div>
         <div class="field">
-            <label>Sort</label>
+            <label for="filter-sort">Sort by</label>
             <select name="sort" id="filter-sort">
                 <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
                 <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>Newest</option>
@@ -29,35 +29,35 @@
             </select>
         </div>
         <div class="field">
-            <label>From</label>
+            <label for="filter-start">From date</label>
             <input type="date" name="start" id="filter-start" value="{{ filters.start or '' }}" />
         </div>
         <div class="field">
-            <label>To</label>
+            <label for="filter-end">To date</label>
             <input type="date" name="end" id="filter-end" value="{{ filters.end or '' }}" />
         </div>
         <div class="field field-search">
-            <label>Search</label>
+            <label for="filter-q">Search by title</label>
             <input type="text" name="q" id="filter-q" placeholder="title…" value="{{ filters.q or '' }}" />
         </div>
     </form>
 </div>
 
 {% if total > 0 %}
-<p class="sort-info" id="sort-info"><strong>{{ total }}</strong> post{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
+<p class="sort-info" id="sort-info" aria-live="polite" aria-atomic="true"><strong>{{ total }}</strong> post{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
 
-<div class="post-feed" id="post-feed">
+<div class="post-feed" id="post-feed" role="list">
     {% for post in posts %}
-    <div class="post-item" data-post-id="{{ post.id }}">
+    <div class="post-item" data-post-id="{{ post.id }}" role="listitem">
         <a href="/posts?subreddit={{ post.subreddit }}" class="r-badge">r/{{ post.subreddit }}</a>
         <div class="post-title">
-            <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener">{{ post.title }}</a>
+            <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
         </div>
         <span class="post-date">{{ post.created_utc|datetimeformat }}</span>
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
         <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
         <span class="r-action">
-            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark">
+            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark this post" aria-pressed="false" aria-label="Bookmark this post">
                 <i class="fa-solid fa-bookmark"></i>
             </button>
         </span>
@@ -65,7 +65,7 @@
     {% endfor %}
 </div>
 
-<div class="pagination" id="pagination">
+<nav class="pagination" id="pagination" aria-label="Posts pagination">
     {% if total_pages > 1 %}
     {% if page > 1 %}
     <a href="/posts?{{ query_params(page - 1, filters) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>

@@ -12,11 +12,13 @@
     {% block head %}{% endblock %}
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Skip to content</a>
+
     <div class="app">
         <header class="header">
             <div class="header-inner">
                 <a href="/" class="logo"><span class="logo-accent">Red</span>Fetcher</a>
-                <nav class="nav">
+                <nav class="nav" role="navigation" aria-label="Main navigation">
                     <a href="/"{% if request.path == '/' %} class="active"{% endif %}>Subreddits</a>
                     <a href="/posts"{% if request.path == '/posts' %} class="active"{% endif %}>Posts</a>
                     <a href="/bookmarks"{% if request.path == '/bookmarks' %} class="active"{% endif %}>Bookmarks</a>
@@ -24,9 +26,9 @@
                 <div class="spacer"></div>
                 <div class="header-search">
                     <div class="search-wrap">
-                        <span class="search-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
-                        <form method="get" action="/posts">
-                            <input type="text" name="q" placeholder="Search…" />
+                        <span class="search-icon" aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        <form method="get" action="/posts" role="search" aria-label="Search posts by title">
+                            <input type="text" name="q" id="header-search-input" placeholder="Search posts…" aria-label="Search posts by title" />
                         </form>
                     </div>
                 </div>
@@ -34,7 +36,7 @@
             </div>
         </header>
 
-        <main class="content">
+        <main class="content" id="main-content" role="main">
             {% block content %}{% endblock %}
         </main>
 
@@ -43,6 +45,10 @@
             <span class="sep">&middot;</span>
             <span>Locally run. SQLite.</span>
         </footer>
+    </div>
+
+    <div class="spinner-container" id="spinner-container">
+        <div class="spinner"></div>
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>

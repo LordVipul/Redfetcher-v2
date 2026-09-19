@@ -29,6 +29,33 @@
         }, 2500);
     }
 
+    function toastWithUndo(msg, type, undoAction) {
+        type = type || 'info';
+        var c = document.getElementById('toast-container');
+        if (!c) return;
+        var t = document.createElement('div');
+        t.className = 'toast ' + type;
+        var msgSpan = document.createElement('span');
+        msgSpan.textContent = msg;
+        t.appendChild(msgSpan);
+        if (undoAction) {
+            var undoBtn = document.createElement('button');
+            undoBtn.className = 'toast-undo';
+            undoBtn.textContent = 'Undo';
+            undoBtn.addEventListener('click', function () {
+                undoAction();
+                t.classList.add('removing');
+                setTimeout(function () { if (t.parentNode) t.remove(); }, 200);
+            });
+            t.appendChild(undoBtn);
+        }
+        c.appendChild(t);
+        setTimeout(function () {
+            t.classList.add('removing');
+            setTimeout(function () { if (t.parentNode) t.remove(); }, 200);
+        }, 4000);
+    }
+
     function formatDate(timestamp) {
         if (!timestamp) return '';
         var d = new Date(timestamp * 1000);
@@ -69,40 +96,99 @@
         btn.classList.add('busy');
         var postId = btn.dataset.postId;
         var isActive = btn.classList.contains('is-active');
-        fetch('/bookmarks/' + postId, { method: isActive ? 'DELETE' : 'POST' })
+        var isBookmarksPage = window.location.pathname === '/bookmarks';
+        var method = isActive ? 'DELETE' : 'POST';
+        fetch('/bookmarks/' + postId, { method: method })
             .then(function (res) { return res.ok; })
             .then(function (ok) {
                 if (!ok) throw new Error();
                 if (isActive) {
-                    btn.classList.remove('is-active');
-                    toast('Bookmark removed');
-                    if (window.__bookmarked) {
-                        window.__bookmarked = window.__bookmarked.filter(function (id) { return id !== postId; });
+                    if (isBookmarksPage) {
+                        btn.closest('.post-item').style.transition = 'opacity 0.15s ease';
+                        btn.closest('.post-item').style.opacity = '0';
+                        setTimeout(function () { if (btn.closest('.post-item')) btn.closest('.post-item').remove(); }, 150);
+                    } else {
+                        btn.classList.remove('is-active');
                     }
-                    if (window.location.pathname === '/bookmarks') {
-                        var item = btn.closest('.post-item');
-                        if (item) {
-                            item.style.transition = 'opacity 0.15s ease';
-                            item.style.opacity = '0';
-                            setTimeout(function () { item.remove(); }, 150);
-                        }
-                        var countEl = document.querySelector('.bookmarks-bar .count');
-                        if (countEl) {
-                            var m = countEl.textContent.match(/\d+/);
-                            if (m) countEl.textContent = (parseInt(m[1]) - 1) + ' saved';
-                        }
-                    }
+                    toastWithUndo('Bookmark removed', 'info', undoBookmark(postId, 'add'));
                 } else {
-                    btn.classList.add('is-active');
-                    toast('Bookmarked', 'success');
-                    if (window.__bookmarked) {
+                    if (isBookmarksPage) {
+                        reloadBookmarksFeed();
+                    } else {
+                        btn.classList.add('is-active');
+                    }
+                    toastWithUndo('Bookmarked', 'success', undoBookmark(postId, 'remove'));
+                }
+                if (window.__bookmarked) {
+                    if (isActive) {
+                        window.__bookmarked = window.__bookmarked.filter(function (id) { return id !== postId; });
+                    } else {
                         window.__bookmarked.push(postId);
+                    }
+                }
+                if (isBookmarksPage) {
+                    var countEl = document.querySelector('.bookmarks-bar .count');
+                    if (countEl) {
+                        var total = parseInt(countEl.textContent.match(/\d+/)[0]);
+                        countEl.textContent = (isActive ? total - 1 : total + 1) + ' saved';
                     }
                 }
             })
             .catch(function () { toast('Failed to update bookmark', 'error'); })
             .finally(function () { btn.classList.remove('busy'); });
     });
+
+    function undoBookmark(postId, action) {
+        return function () {
+            var method = action === 'add' ? 'POST' : 'DELETE';
+            fetch('/bookmarks/' + postId, { method: method })
+                .then(function (res) { return res.ok; })
+                .then(function (ok) {
+                    if (!ok) throw new Error();
+                    if (window.location.pathname === '/bookmarks') {
+                        reloadBookmarksFeed();
+                    }
+                    if (window.__bookmarked) {
+                        if (action === 'add') {
+                            window.__bookmarked.push(postId);
+                        } else {
+                            window.__bookmarked = window.__bookmarked.filter(function (id) { return id !== postId; });
+                        }
+                    }
+                })
+                .catch(function () { toast('Failed to undo', 'error'); });
+        };
+    }
+
+    function reloadBookmarksFeed() {
+        fetch('/api/bookmarks?limit=50&sort=oldest')
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                var feed = document.getElementById('post-feed');
+                if (feed) {
+                    if (data.posts.length === 0) {
+                        feed.innerHTML = '<div class="empty-state"><div class="icon"><i class="fa-regular fa-bookmark"></i></div><h2>No bookmarks yet</h2><p>Browse the <a href="/posts">posts feed</a> and save what interests you.</p></div>';
+                        var pag = document.getElementById('pagination');
+                        if (pag) pag.innerHTML = '';
+                        return;
+                    }
+                    feed.innerHTML = data.posts.map(function (p) {
+                        var url = p.url && p.url.startsWith('http') ? p.url : 'https://www.reddit.com' + p.url;
+                        return '<div class="post-item" role="listitem" data-post-id="' + p.id + '">' +
+                            '<a href="/posts?subreddit=' + encodeURIComponent(p.subreddit || '') + '" class="r-badge">r/' + p.subreddit + '</a>' +
+                            '<div class="post-title"><a href="' + url + '" target="_blank" rel="noopener">' + p.title + '</a></div>' +
+                            '<span class="post-date">' + formatDate(p.created_utc) + '</span>' +
+                            '<span class="r-score"><i class="fa-solid fa-arrow-up"></i> ' + p.score + '</span>' +
+                            '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' + p.num_comments + '</span>' +
+                            '<span class="r-action"><button class="bookmark-btn is-active" data-post-id="' + p.id + '" title="Remove bookmark" aria-pressed="true" aria-label="Remove bookmark"><i class="fa-solid fa-bookmark"></i></button></span>' +
+                        '</div>';
+                    }).join('');
+                }
+                var countEl = document.querySelector('.bookmarks-bar .count');
+                if (countEl) countEl.textContent = data.total + ' saved';
+            })
+            .catch(function () { toast('Failed to reload bookmarks', 'error'); });
+    }
 
     // ── Posts Page: Live Filtering ─────────────────
     if (document.getElementById('filter-bar')) {
@@ -126,10 +212,11 @@
             var comments = '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' + (post.num_comments || 0) + '</span>';
             var dt = '<span class="post-date">' + date + '</span>';
             var cls = isBookmarked ? ' is-active' : '';
-            var btn = '<button class="bookmark-btn' + cls + '" data-post-id="' + escapeHtml(post.id || '') + '" title="Bookmark"><i class="fa-solid fa-bookmark"></i></button>';
+            var pressed = isBookmarked ? 'true' : 'false';
+            var btn = '<button class="bookmark-btn' + cls + '" data-post-id="' + escapeHtml(post.id || '') + '" title="' + (isBookmarked ? 'Remove bookmark' : 'Bookmark this post') + '" aria-pressed="' + pressed + '" aria-label="' + (isBookmarked ? 'Remove bookmark' : 'Bookmark this post') + '"><i class="fa-solid fa-bookmark"></i></button>';
             return '<div class="post-item" data-post-id="' + escapeHtml(post.id || '') + '">' +
                 badge +
-                '<div class="post-title"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a></div>' +
+                '<div class="post-title"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" title="' + escapeHtml(title) + '">' + title + '</a></div>' +
                 dt + score + comments +
                 '<span class="r-action">' + btn + '</span>' +
             '</div>';
@@ -152,6 +239,19 @@
             if (!info) return;
             var label = isBookmarks ? 'bookmark' : 'post';
             info.innerHTML = '<strong>' + t + '</strong> ' + label + (t !== 1 ? 's' : '') + ' &middot; page ' + page + ' of ' + tp;
+        }
+
+        function announceResults(total, label) {
+            var ann = document.getElementById('sr-announcer');
+            if (!ann) {
+                ann = document.createElement('div');
+                ann.id = 'sr-announcer';
+                ann.setAttribute('aria-live', 'polite');
+                ann.setAttribute('aria-atomic', 'true');
+                ann.className = 'sr-only';
+                document.body.appendChild(ann);
+            }
+            ann.textContent = total + ' ' + label + (total !== 1 ? 's' : '') + ' loaded';
         }
 
         function updatePagination(page, tp, filters) {
@@ -206,8 +306,21 @@
             }
         }
 
+        var spinner = document.getElementById('spinner-container');
+
+        function showSpinner() {
+            if (spinner) spinner.classList.add('visible');
+        }
+
+        function hideSpinner() {
+            if (spinner) spinner.classList.remove('visible');
+        }
+
         function fetchAndUpdate(page) {
             var f = Object.assign({}, filters, { page: page || 1 });
+            showSpinner();
+            var feed = document.getElementById("post-feed");
+            if (feed) feed.classList.add("fading");
             var url = apiBase + '?' + new URLSearchParams({
                 subreddit: f.subreddit || '',
                 sort: f.sort || 'oldest',
@@ -230,8 +343,12 @@
                     renderFeed(data.posts, window.__bookmarked || []);
                     updateSortInfo(total, f.page, tp);
                     updatePagination(f.page, tp, f);
+                    var label = isBookmarks ? 'bookmark' : 'post';
+                    announceResults(total, label);
+                    hideSpinner();
+                    if (feed) feed.classList.remove("fading");
                 })
-                .catch(function () { toast('Failed to load posts', 'error'); });
+                .catch(function () { toast('Failed to load posts', 'error'); hideSpinner(); if (feed) feed.classList.remove('fading'); });
         }
 
         function onFilterChange(page) {
