@@ -89,11 +89,11 @@ The web UI provides:
 - **Subreddit list** with post counts on the home page (`/`)
 - **Bookmarks page** (`/bookmarks`) — save and filter posts you want to keep
 - **Filter bar** with:
-    - Subreddit dropdown
-    - Date range (start/end)
-    - Sort by score, comments, newest, oldest
-    - Title keyword search
-    - Result limit (50, 100, 200, 500)
+  - Subreddit dropdown
+  - Date range (start/end)
+  - Sort by score, comments, newest, oldest
+  - Title keyword search
+  - Result limit (50, 100, 200, 500)
 - **Post cards** with title (clickable link to Reddit), subreddit badge, score, comment count, date, and bookmark button
 - Dark theme with red-orange accent (`#E85D3A`), responsive design
 - Client-side live filtering, pagination with jump-to-page, and URL state preservation

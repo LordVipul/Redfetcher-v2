@@ -57,7 +57,7 @@
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
         <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
         <span class="r-action">
-            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark this post" aria-pressed="false" aria-label="Bookmark this post">
+            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark this post" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="Bookmark this post">
                 <i class="fa-solid fa-bookmark"></i>
             </button>
         </span>

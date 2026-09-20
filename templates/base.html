@@ -1,59 +1,104 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}RedFetcher{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    />
     <link rel="stylesheet" href="/static/css/style.css" />
     {% block head %}{% endblock %}
-</head>
-<body>
+  </head>
+  <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
 
     <div class="app">
-        <header class="header">
-            <div class="header-inner">
-                <a href="/" class="logo"><span class="logo-accent">Red</span>Fetcher</a>
-                <nav class="nav" role="navigation" aria-label="Main navigation">
-                    <a href="/"{% if request.path == '/' %} class="active"{% endif %}>Subreddits</a>
-                    <a href="/posts"{% if request.path == '/posts' %} class="active"{% endif %}>Posts</a>
-                    <a href="/bookmarks"{% if request.path == '/bookmarks' %} class="active"{% endif %}>Bookmarks</a>
-                </nav>
-                <div class="spacer"></div>
-                <div class="header-search">
-                    <div class="search-wrap">
-                        <span class="search-icon" aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span>
-                        <form method="get" action="/posts" role="search" aria-label="Search posts by title">
-                            <input type="text" name="q" id="header-search-input" placeholder="Search posts…" aria-label="Search posts by title" />
-                        </form>
-                    </div>
-                </div>
-                <a href="/posts" class="header-cta">Browse all</a>
+      <header class="header">
+        <div class="header-inner">
+          <a href="/" class="logo"
+            ><span class="logo-accent">Red</span>Fetcher</a
+          >
+          <nav class="nav" role="navigation" aria-label="Main navigation">
+            <a href="/" {% if request.path="" ="/" %}class="active"{% endif %}
+              >Subreddits</a
+            >
+            <a
+              href="/posts"
+              {%
+                if
+                request.path=""
+                ="/posts"
+              %}
+                class="active"
+              {% endif %}
+              >Posts</a
+            >
+            <a
+              href="/bookmarks"
+              {%
+                if
+                request.path=""
+                ="/bookmarks"
+              %}
+                class="active"
+              {% endif %}
+              >Bookmarks</a
+            >
+          </nav>
+          <div class="spacer"></div>
+          <div class="header-search">
+            <div class="search-wrap">
+              <span class="search-icon" aria-hidden="true"
+                ><i class="fa-solid fa-magnifying-glass"></i
+              ></span>
+              <form
+                method="get"
+                action="/posts"
+                role="search"
+                aria-label="Search posts by title"
+              >
+                <input
+                  type="text"
+                  name="q"
+                  id="header-search-input"
+                  placeholder="Search posts…"
+                  aria-label="Search posts by title"
+                />
+              </form>
             </div>
-        </header>
+          </div>
+          <a href="/posts" class="header-cta">Browse all</a>
+        </div>
+      </header>
 
-        <main class="content" id="main-content" role="main">
-            {% block content %}{% endblock %}
-        </main>
+      <main class="content" id="main-content" role="main">
+        {% block content %}{% endblock %}
+      </main>
 
-        <footer class="footer">
-            <span>RedFetcher v2</span>
-            <span class="sep">&middot;</span>
-            <span>Locally run. SQLite.</span>
-        </footer>
+      <footer class="footer">
+        <span>RedFetcher v2</span>
+        <span class="sep">&middot;</span>
+        <span>Locally run. SQLite.</span>
+      </footer>
     </div>
 
     <div class="spinner-container" id="spinner-container">
-        <div class="spinner"></div>
+      <div class="spinner"></div>
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <script src="/static/js/app.js"></script>
     {% block scripts %}{% endblock %}
-</body>
+  </body>
 </html>
