@@ -423,4 +423,14 @@
         history.replaceState({ filters: filters }, '', buildUrl(filters));
     }
 
+    // ── Keyboard Shortcuts ──────────────────────
+    document.addEventListener('keydown', function (e) {
+        // Ctrl+K or / to focus search
+        if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName))) {
+            e.preventDefault();
+            var searchInput = document.getElementById('header-search-input') || document.getElementById('filter-q');
+            if (searchInput) searchInput.focus();
+        }
+    });
+
 })();
