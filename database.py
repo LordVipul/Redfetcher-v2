@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import config
 
@@ -61,6 +62,10 @@ def init_db():
         if not had_fts:
             conn.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
         conn.commit()
+        try:
+            os.chmod(config.DB_PATH, 0o600)
+        except OSError:
+            pass  # e.g. Windows: chmod is limited to the read-only flag
     finally:
         conn.close()
 
@@ -145,7 +150,9 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc",
             "newest": "created_utc DESC",
             "oldest": "created_utc ASC",
         }
-        order = sort_map.get(sort, "score DESC")
+        if sort not in sort_map:
+            raise ValueError(f"invalid sort: {sort!r}")
+        order = sort_map[sort]
         offset = (page - 1) * limit
 
         query = (
@@ -222,10 +229,17 @@ def is_bookmarked(post_id):
         conn.close()
 
 
-def get_bookmark_ids():
+def get_bookmark_ids_for(post_ids):
+    """Return the subset of post_ids that are bookmarked."""
+    if not post_ids:
+        return []
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT post_id FROM bookmarks ORDER BY created_at ASC").fetchall()
+        placeholders = ",".join("?" * len(post_ids))
+        rows = conn.execute(
+            f"SELECT post_id FROM bookmarks WHERE post_id IN ({placeholders})",
+            list(post_ids),
+        ).fetchall()
         return [r["post_id"] for r in rows]
     finally:
         conn.close()
@@ -263,7 +277,9 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
             "comments_desc": "p.num_comments DESC",
             "comments_asc": "p.num_comments ASC",
         }
-        order = sort_map.get(sort, "b.created_at ASC")
+        if sort not in sort_map:
+            raise ValueError(f"invalid sort: {sort!r}")
+        order = sort_map[sort]
 
         query = (
             "SELECT p.*, b.created_at as bookmarked_at, COUNT(*) OVER() AS _total "

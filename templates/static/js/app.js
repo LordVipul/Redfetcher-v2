@@ -490,6 +490,17 @@
         .then(function (data) {
           total = data.total;
           var tp = getTotalPages(total, f.limit);
+          if (data.bookmarked_ids) {
+            var returned = {};
+            data.posts.forEach(function (p) {
+              returned[p.id] = true;
+            });
+            window.__bookmarked = (window.__bookmarked || [])
+              .filter(function (id) {
+                return !returned[id];
+              })
+              .concat(data.bookmarked_ids);
+          }
           renderFeed(data.posts, window.__bookmarked || []);
           updateSortInfo(total, f.page, tp);
           updatePagination(f.page, tp, f);

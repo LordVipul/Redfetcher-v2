@@ -7,6 +7,7 @@ CLIENT_TIMEOUT = 15          # Reduced from 60
 MAX_RETRIES = 2               # Reduced from 4
 BACKOFF_FACTOR = 2.0
 
+# Contains all scraped Reddit data — keep file permissions restrictive (see init_db).
 DB_PATH = "reddit_archive.db"
 
 START_YEAR = 2005

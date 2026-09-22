@@ -2,6 +2,7 @@ from urllib.parse import urlencode
 
 import asyncio
 import logging
+import re
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +40,36 @@ def to_timestamp(date_str):
     return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp()
 
 
+# ── Input validation ─────────────────────────────────────────
+
+SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
+POST_SORTS = {"score_desc", "score_asc", "comments_desc", "comments_asc", "newest", "oldest"}
+BOOKMARK_SORTS = {"oldest", "newest", "score_desc", "score_asc", "comments_desc", "comments_asc"}
+Q_MIN_LEN, Q_MAX_LEN = 2, 100
+
+
+def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, allowed_sorts=None):
+    """Validate query parameters. Returns an error message, or None if valid."""
+    if subreddit and not SUBREDDIT_RE.match(subreddit):
+        return f"invalid subreddit name: {subreddit!r}"
+    if sort is not None and allowed_sorts is not None and sort not in allowed_sorts:
+        return f"invalid sort: {sort!r} (allowed: {', '.join(sorted(allowed_sorts))})"
+    if q is not None and not (Q_MIN_LEN <= len(q) <= Q_MAX_LEN):
+        return f"q must be between {Q_MIN_LEN} and {Q_MAX_LEN} characters"
+    try:
+        start_ts = to_timestamp(start)
+        end_ts = to_timestamp(end)
+    except (ValueError, OverflowError):
+        return "invalid date: start and end must be ISO format (e.g. 2024-01-31)"
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+        return "invalid date range: start must be before end"
+    return None
+
+
+def bad_request(message):
+    return JSONResponse(status_code=400, content={"error": message})
+
+
 templates.env.filters["datetimeformat"] = format_date
 
 
@@ -57,8 +88,13 @@ templates.env.globals["query_params"] = query_params
 templates.env.globals["abs"] = abs
 # ── Shared context ───────────────────────────────────────────
 
-async def build_template_context(request: Request, extra=None):
-    bookmarked_ids = await asyncio.to_thread(database.get_bookmark_ids)
+async def build_template_context(request: Request, extra=None, post_ids=(), bookmarked_ids=None):
+    if bookmarked_ids is None:
+        bookmarked_ids = (
+            await asyncio.to_thread(database.get_bookmark_ids_for, list(post_ids))
+            if post_ids
+            else []
+        )
     ctx = {
         "request": request,
         "bookmarked_ids": list(bookmarked_ids),
@@ -90,6 +126,8 @@ async def posts(
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
+    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS):
+        return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_posts,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
@@ -111,7 +149,7 @@ async def posts(
             "total": total,
             "page": page,
             "total_pages": total_pages,
-        }),
+        }, post_ids=[p["id"] for p in results]),
     )
 
 
@@ -125,13 +163,18 @@ async def api_posts(
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
+    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS):
+        return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_posts,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
     )
     log.info(f"GET /api/posts — {len(results)} posts returned")
-    return {"posts": results, "total": total}
+    bookmarked_ids = await asyncio.to_thread(
+        database.get_bookmark_ids_for, [p["id"] for p in results]
+    )
+    return {"posts": results, "total": total, "bookmarked_ids": bookmarked_ids}
 
 
 @app.get("/stats")
@@ -152,6 +195,8 @@ async def bookmarks(
     end: str = Query(None),
     q: str = Query(None),
 ):
+    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS):
+        return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
@@ -170,7 +215,7 @@ async def bookmarks(
             "page": page,
             "total_pages": total_pages,
             "all_subreddits": all_subreddits,
-        }),
+        }, bookmarked_ids=[p["id"] for p in results]),
     )
 
 
@@ -184,13 +229,15 @@ async def api_bookmarks(
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
+    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS):
+        return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end), q=q,
     )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
-    return {"posts": results, "total": total}
+    return {"posts": results, "total": total, "bookmarked_ids": [p["id"] for p in results]}
 
 
 @app.post("/bookmarks/{post_id}")

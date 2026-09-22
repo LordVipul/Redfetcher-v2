@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 import sys
 from datetime import datetime
@@ -6,6 +7,8 @@ from arcshiftwrap.arctic_shift import ArcticShiftClient, split_time_range, norma
 
 import config
 import database
+
+SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -178,6 +181,12 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) > 1:
             subreddit = sys.argv[1]
+            if not SUBREDDIT_RE.match(subreddit):
+                log.error(
+                    f"Invalid subreddit name: {subreddit!r} "
+                    "(must be 3-21 chars: letters, digits, underscores)"
+                )
+                sys.exit(1)
             scrape_subreddit(subreddit)
         else:
             scrape_all()
