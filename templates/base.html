@@ -29,15 +29,13 @@
             ><span class="logo-accent">Red</span>Fetcher</a
           >
           <nav class="nav" role="navigation" aria-label="Main navigation">
-            <a href="/" {% if request.path="" ="/" %}class="active"{% endif %}
+            <a href="/" {% if request.path == "/" %}class="active"{% endif %}
               >Subreddits</a
             >
             <a
               href="/posts"
-              {%
-                if
-                request.path=""
-                ="/posts"
+{%
+                if request.path == "/posts"
               %}
                 class="active"
               {% endif %}
@@ -45,10 +43,8 @@
             >
             <a
               href="/bookmarks"
-              {%
-                if
-                request.path=""
-                ="/bookmarks"
+{%
+                if request.path == "/bookmarks"
               %}
                 class="active"
               {% endif %}

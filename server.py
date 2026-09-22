@@ -1,11 +1,12 @@
 from urllib.parse import urlencode
 
+import asyncio
 import logging
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from datetime import datetime
+from datetime import datetime, timezone
 import config
 import database
 
@@ -27,8 +28,15 @@ def format_date(value):
         return ""
     try:
         return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M")
-    except (ValueError, OSError):
+    except (ValueError, OverflowError, OSError):
         return str(value)
+
+
+def to_timestamp(date_str):
+    """Convert an ISO date string to a Unix timestamp, or None."""
+    if not date_str:
+        return None
+    return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp()
 
 
 templates.env.filters["datetimeformat"] = format_date
@@ -49,10 +57,11 @@ templates.env.globals["query_params"] = query_params
 templates.env.globals["abs"] = abs
 # ── Shared context ───────────────────────────────────────────
 
-def build_template_context(request: Request, extra=None):
+async def build_template_context(request: Request, extra=None):
+    bookmarked_ids = await asyncio.to_thread(database.get_bookmark_ids)
     ctx = {
         "request": request,
-        "bookmarked_ids": list(database.get_bookmark_ids()),
+        "bookmarked_ids": list(bookmarked_ids),
     }
     if extra:
         ctx.update(extra)
@@ -63,10 +72,10 @@ def build_template_context(request: Request, extra=None):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    stats = database.get_stats()
+    stats = await asyncio.to_thread(database.get_stats)
     return templates.TemplateResponse(
         request, "index.html",
-        build_template_context(request, {"stats": stats})
+        await build_template_context(request, {"stats": stats})
     )
 
 
@@ -77,15 +86,16 @@ async def posts(
     start: str = Query(None),
     end: str = Query(None),
     sort: str = Query("oldest"),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
-    results, total = database.get_posts(
-        subreddit=subreddit, start_date=start, end_date=end,
+    results, total = await asyncio.to_thread(
+        database.get_posts,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
     )
-    all_subreddits = database.get_all_subreddits()
+    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     log.info(
         f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
@@ -94,7 +104,7 @@ async def posts(
     return templates.TemplateResponse(
         request,
         "posts.html",
-        build_template_context(request, {
+        await build_template_context(request, {
             "posts": results,
             "filters": {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q},
             "all_subreddits": all_subreddits,
@@ -111,18 +121,22 @@ async def api_posts(
     start: str = Query(None),
     end: str = Query(None),
     sort: str = Query("oldest"),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
-    results, total = database.get_posts(subreddit, start, end, sort, limit, q, page)
+    results, total = await asyncio.to_thread(
+        database.get_posts,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
+        sort=sort, limit=limit, q=q, page=page,
+    )
     log.info(f"GET /api/posts — {len(results)} posts returned")
     return {"posts": results, "total": total}
 
 
 @app.get("/stats")
 async def stats():
-    data = database.get_stats()
+    data = await asyncio.to_thread(database.get_stats)
     log.info(f"GET /stats — {len(data)} subreddits")
     return data
 
@@ -131,27 +145,25 @@ async def stats():
 async def bookmarks(
     request: Request,
     sort: str = Query("oldest"),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=500),
     page: int = Query(1, ge=1),
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
     q: str = Query(None),
 ):
-    results = database.get_bookmarks(
+    results, total = await asyncio.to_thread(
+        database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
-        subreddit=subreddit, start_date=start, end_date=end, q=q,
-    )
-    total = database.get_bookmarks_count(
-        subreddit=subreddit, start_date=start, end_date=end, q=q,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end), q=q,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
-    all_subreddits = database.get_all_subreddits()
+    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     log.info(f"GET /bookmarks — subreddit={subreddit}, sort={sort}, q={'yes' if q else 'no'}, page={page}, total={total}")
     return templates.TemplateResponse(
         request,
         "bookmarks.html",
-        build_template_context(request, {
+        await build_template_context(request, {
             "posts": results,
             "filters": {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q},
             "total": total,
@@ -168,16 +180,14 @@ async def api_bookmarks(
     start: str = Query(None),
     end: str = Query(None),
     sort: str = Query("oldest"),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
 ):
-    results = database.get_bookmarks(
+    results, total = await asyncio.to_thread(
+        database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
-        subreddit=subreddit, start_date=start, end_date=end, q=q,
-    )
-    total = database.get_bookmarks_count(
-        subreddit=subreddit, start_date=start, end_date=end, q=q,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end), q=q,
     )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
     return {"posts": results, "total": total}
@@ -185,14 +195,14 @@ async def api_bookmarks(
 
 @app.post("/bookmarks/{post_id}")
 async def add_bookmark(post_id: str):
-    database.add_bookmark(post_id)
+    await asyncio.to_thread(database.add_bookmark, post_id)
     log.info(f"POST /bookmarks/{post_id} — bookmark added")
     return JSONResponse({"status": "bookmarked", "post_id": post_id})
 
 
 @app.delete("/bookmarks/{post_id}")
 async def remove_bookmark(post_id: str):
-    database.remove_bookmark(post_id)
+    await asyncio.to_thread(database.remove_bookmark, post_id)
     log.info(f"DELETE /bookmarks/{post_id} — bookmark removed")
     return JSONResponse({"status": "unbookmarked", "post_id": post_id})
 
@@ -203,4 +213,5 @@ if __name__ == "__main__":
     import uvicorn
     database.init_db()
     log.info("Starting server on http://127.0.0.1:8000")
+    # Local-only tool: never expose this server publicly — no auth is implemented.
     uvicorn.run(app, host="127.0.0.1", port=8000)
