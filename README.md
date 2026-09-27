@@ -98,6 +98,7 @@ The web UI provides:
   - Date range (start/end)
   - Sort by score, comments, newest, oldest
   - Title keyword search
+  - Minimum score and minimum comment count thresholds (independent, digits-only inputs)
   - Result limit (50, 100, 200, 500)
 - **Post cards** with title (clickable link to Reddit), subreddit badge, score, comment count, date, and bookmark button
 - Dark theme with red-orange accent (`#E85D3A`), responsive design
@@ -128,8 +129,19 @@ Query parameters for `/posts`, `/api/posts`, `/bookmarks`, and `/api/bookmarks`:
 | `limit`     | int    | 50       | Max results         |
 | `q`         | string | none     | Title search        |
 | `page`      | int    | 1        | Page number         |
+| `min_score` | int    | none     | Minimum score (`>=`) |
+| `min_comments` | int | none     | Minimum comment count (`>=`) |
 
 Sort options: `score_desc`, `score_asc`, `comments_desc`, `comments_asc`, `newest`, `oldest`
+
+`min_score` and `min_comments` are independent and combine with every other filter. Omitting
+the parameter applies no threshold; sending `0` applies `>= 0`, which is a real filter and is
+narrower than omitting it whenever a post has a negative score or comment count. Both reject
+negative or non-numeric values with HTTP 400.
+
+The filter bar labels them **Min score** and **Min comm**. Both inputs accept digits only —
+non-numeric characters are rejected as you type and stripped from pasted text, keeping the
+leading run of digits, so `1e3` becomes `1` and `12.5` becomes `12`.
 
 ## Configuration
 
@@ -259,7 +271,7 @@ The templates check if `post.url` already starts with `http` before prepending `
 
 ### Client-Side Features
 
-- **Live filtering**: All filters (subreddit, sort, date range, search, limit) work via `fetch()` without full page reloads
+- **Live filtering**: All filters (subreddit, sort, date range, search, min score, min comm, limit) work via `fetch()` without full page reloads
 - **URL state**: Filter state is preserved in the URL query string — shareable links
 - **Pagination**: Page numbers, Prev/Next, and jump-to-page input
 - **Bookmarks**: Toggle bookmarks with undo toast notifications; works on both `/posts` and `/bookmarks` pages

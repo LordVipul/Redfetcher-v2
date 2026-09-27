@@ -56,9 +56,30 @@ SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
 POST_SORTS = {"score_desc", "score_asc", "comments_desc", "comments_asc", "newest", "oldest"}
 BOOKMARK_SORTS = {"oldest", "newest", "score_desc", "score_asc", "comments_desc", "comments_asc"}
 Q_MIN_LEN, Q_MAX_LEN = 2, 100
+MAX_MIN_FILTER = 1_000_000_000
 
 
-def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, allowed_sorts=None):
+def parse_min_filter(value):
+    """Normalize a minimum score/comments param.
+
+    None or "" means "no filter". "0" is a real filter meaning >= 0, which is
+    distinct from no filter because score and num_comments can be negative.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError("must be 0 or greater")
+    if parsed > MAX_MIN_FILTER:
+        raise ValueError(f"must be at most {MAX_MIN_FILTER}")
+    return parsed
+
+
+def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, allowed_sorts=None, min_score=None, min_comments=None):
     """Validate query parameters. Returns an error message, or None if valid."""
     if subreddit and not SUBREDDIT_RE.match(subreddit):
         return f"invalid subreddit name: {subreddit!r}"
@@ -66,6 +87,11 @@ def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, al
         return f"invalid sort: {sort!r} (allowed: {', '.join(sorted(allowed_sorts))})"
     if q not in (None, "") and not (Q_MIN_LEN <= len(q) <= Q_MAX_LEN):
         return f"q must be between {Q_MIN_LEN} and {Q_MAX_LEN} characters"
+    for name, raw in (("min_score", min_score), ("min_comments", min_comments)):
+        try:
+            parse_min_filter(raw)
+        except (TypeError, ValueError):
+            return f"invalid {name}: must be a whole number, 0 or greater"
     try:
         start_ts = to_timestamp(start)
         end_ts = to_end_timestamp(end)
@@ -141,13 +167,16 @@ async def posts(
     limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
+    min_score: str = Query(None),
+    min_comments: str = Query(None),
 ):
-    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS):
+    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
         return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_posts,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
+        min_score=parse_min_filter(min_score), min_comments=parse_min_filter(min_comments),
     )
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
@@ -155,7 +184,8 @@ async def posts(
         return redirect_to_page(
             "/posts",
             total_pages,
-            {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q},
+            {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q,
+             "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
         )
     log.info(
         f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
@@ -166,7 +196,8 @@ async def posts(
         "posts.html",
         await build_template_context(request, {
             "posts": results,
-            "filters": {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q},
+            "filters": {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q,
+                        "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
             "all_subreddits": all_subreddits,
             "total": total,
             "page": page,
@@ -184,13 +215,18 @@ async def api_posts(
     limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
+    min_score: str = Query(None),
+    min_comments: str = Query(None),
 ):
-    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS):
+    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
         return bad_request(err)
+    min_score = parse_min_filter(min_score)
+    min_comments = parse_min_filter(min_comments)
     results, total = await asyncio.to_thread(
         database.get_posts,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
+        min_score=min_score, min_comments=min_comments,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
@@ -200,6 +236,7 @@ async def api_posts(
                 database.get_posts,
                 subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
                 sort=sort, limit=limit, q=q, page=page,
+                min_score=min_score, min_comments=min_comments,
             )
     log.info(f"GET /api/posts — {len(results)} posts returned")
     bookmarked_ids = await asyncio.to_thread(
@@ -231,20 +268,24 @@ async def bookmarks(
     start: str = Query(None),
     end: str = Query(None),
     q: str = Query(None),
+    min_score: str = Query(None),
+    min_comments: str = Query(None),
 ):
-    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS):
+    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS, min_score, min_comments):
         return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+        min_score=parse_min_filter(min_score), min_comments=parse_min_filter(min_comments),
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
         return redirect_to_page(
             "/bookmarks",
             total_pages,
-            {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q},
+            {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q,
+             "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
         )
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     log.info(f"GET /bookmarks — subreddit={subreddit}, sort={sort}, q={'yes' if q else 'no'}, page={page}, total={total}")
@@ -253,7 +294,8 @@ async def bookmarks(
         "bookmarks.html",
         await build_template_context(request, {
             "posts": results,
-            "filters": {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q},
+            "filters": {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q,
+                        "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
             "total": total,
             "page": page,
             "total_pages": total_pages,
@@ -271,13 +313,18 @@ async def api_bookmarks(
     limit: int = Query(50, ge=1, le=500),
     q: str = Query(None),
     page: int = Query(1, ge=1),
+    min_score: str = Query(None),
+    min_comments: str = Query(None),
 ):
-    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS):
+    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS, min_score, min_comments):
         return bad_request(err)
+    min_score = parse_min_filter(min_score)
+    min_comments = parse_min_filter(min_comments)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+        min_score=min_score, min_comments=min_comments,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
@@ -287,6 +334,7 @@ async def api_bookmarks(
                 database.get_bookmarks,
                 limit=limit, offset=(page - 1) * limit, sort=sort,
                 subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+                min_score=min_score, min_comments=min_comments,
             )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
     return {

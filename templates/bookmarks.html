@@ -48,6 +48,14 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
             </select>
         </div>
         <div class="field">
+            <label for="filter-min-score">Min score</label>
+            <input type="number" name="min_score" id="filter-min-score" min="0" step="1" inputmode="numeric" placeholder="any" value="{{ '' if filters.min_score is none else filters.min_score }}" />
+        </div>
+        <div class="field">
+            <label for="filter-min-comments">Min comm</label>
+            <input type="number" name="min_comments" id="filter-min-comments" min="0" step="1" inputmode="numeric" placeholder="any" value="{{ '' if filters.min_comments is none else filters.min_comments }}" />
+        </div>
+        <div class="field">
             <label for="filter-start">From date</label>
             <input type="date" name="start" id="filter-start" value="{{ filters.start or '' }}" />
         </div>

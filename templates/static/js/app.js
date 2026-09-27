@@ -84,6 +84,18 @@
       .replace(/"/g, "&quot;");
   }
 
+  // Minimum score/comments: null and "" mean "no filter"; 0 is a real filter.
+  function hasMinFilter(v) {
+    return v !== null && v !== undefined && v !== "";
+  }
+
+  function setMinParams(params, filters) {
+    if (hasMinFilter(filters.min_score))
+      params.set("min_score", filters.min_score);
+    if (hasMinFilter(filters.min_comments))
+      params.set("min_comments", filters.min_comments);
+  }
+
   function buildApiQuery(filters, page) {
     var params = new URLSearchParams();
     if (filters.subreddit) params.set("subreddit", filters.subreddit);
@@ -92,6 +104,7 @@
     if (filters.end) params.set("end", filters.end);
     if (filters.q) params.set("q", filters.q);
     if (filters.limit) params.set("limit", filters.limit);
+    setMinParams(params, filters);
     params.set("page", page || filters.page || 1);
     return params.toString();
   }
@@ -104,6 +117,7 @@
     if (filters.end) params.set("end", filters.end);
     if (filters.q) params.set("q", filters.q);
     if (filters.limit) params.set("limit", filters.limit);
+    setMinParams(params, filters);
     params.set("page", filters.page || 1);
     return pageBase + "?" + params.toString();
   }
@@ -422,11 +436,15 @@
         q: "",
         limit: 50,
         page: 1,
+        min_score: null,
+        min_comments: null,
       },
       window.__filters || {},
     );
     filters.page = window.__page || 1;
     filters.q = filters.q || "";
+    if (!hasMinFilter(filters.min_score)) filters.min_score = null;
+    if (!hasMinFilter(filters.min_comments)) filters.min_comments = null;
     var total = window.__total || 0;
     var Q_MIN_LEN = 2;
 
@@ -690,6 +708,7 @@
       filterForm.addEventListener("submit", function (e) {
         e.preventDefault();
         if (qEl) filters.q = qEl.value;
+        syncMinFilters();
         if (isSearchTooShort(filters.q)) {
           setSearchHint(true);
           if (qEl) qEl.focus();
@@ -707,6 +726,75 @@
     var startEl = document.getElementById("filter-start");
     var endEl = document.getElementById("filter-end");
     var qEl = document.getElementById("filter-q");
+    var minScoreEl = document.getElementById("filter-min-score");
+    var minCommentsEl = document.getElementById("filter-min-comments");
+
+    // Keep only the leading run of digits, so pasted or typed text, signs,
+    // decimals and exponent forms can never reach the query string. Taking a
+    // prefix rather than deleting every non-digit means "1e3" becomes "1"
+    // instead of the misleading "13".
+    function sanitizeMinInput(el) {
+      if (!el) return;
+      var match = el.value.trim().match(/^[0-9]*/);
+      var cleaned = match ? match[0] : "";
+      if (cleaned !== el.value) el.value = cleaned;
+    }
+
+    // Read a number input as a filter value: "" -> null (off), else the int.
+    function readMinFilter(el) {
+      if (!el) return null;
+      var raw = el.value.trim();
+      if (raw === "") return null;
+      var n = parseInt(raw, 10);
+      return isNaN(n) || n < 0 ? null : n;
+    }
+
+    function syncMinFilters() {
+      filters.min_score = readMinFilter(minScoreEl);
+      filters.min_comments = readMinFilter(minCommentsEl);
+    }
+
+    if (minScoreEl || minCommentsEl) {
+      [minScoreEl, minCommentsEl].forEach(function (el) {
+        if (!el) return;
+        // Sanitize before reading, on every path that can change the value.
+        el.addEventListener("beforeinput", function () {
+          sanitizeMinInput(el);
+        });
+        el.addEventListener("paste", function () {
+          sanitizeMinInput(el);
+        });
+        el.addEventListener(
+          "input",
+          debounce(function () {
+            sanitizeMinInput(el);
+            syncMinFilters();
+            onFilterChange(1, "none");
+          }, 250),
+        );
+        el.addEventListener("change", function () {
+          sanitizeMinInput(el);
+          syncMinFilters();
+          onFilterChange(1, "replace");
+        });
+        el.addEventListener("keydown", function (e) {
+          var k = e.key;
+          if (
+            k.length === 1 &&
+            !/[0-9]/.test(k) &&
+            !e.ctrlKey &&
+            !e.metaKey &&
+            k !== "Backspace" &&
+            k !== "Delete" &&
+            k !== "Tab" &&
+            k !== "ArrowLeft" &&
+            k !== "ArrowRight"
+          ) {
+            e.preventDefault();
+          }
+        });
+      });
+    }
 
     if (subredditEl)
       subredditEl.addEventListener("change", function () {
@@ -791,6 +879,11 @@
         if (startEl) startEl.value = f.start || "";
         if (endEl) endEl.value = f.end || "";
         if (qEl) qEl.value = f.q || "";
+        if (minScoreEl) minScoreEl.value = hasMinFilter(f.min_score) ? f.min_score : "";
+        if (minCommentsEl)
+          minCommentsEl.value = hasMinFilter(f.min_comments)
+            ? f.min_comments
+            : "";
         setSearchHint(isSearchTooShort(f.q || ""));
         fetchAndUpdate(f.page || 1, "none");
       }

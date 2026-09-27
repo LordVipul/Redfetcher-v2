@@ -375,7 +375,8 @@ select {
 }
 .filter-bar select,
 .filter-bar input[type="date"],
-.filter-bar input[type="text"] {
+.filter-bar input[type="text"],
+.filter-bar input[type="number"] {
   background: var(--surface);
   border: var(--border-w) solid var(--border);
   padding: var(--space-1) 0.5rem;
@@ -396,6 +397,21 @@ select {
 .filter-bar select option {
   background: var(--surface);
   color: var(--text);
+}
+.filter-bar input[type="number"] {
+  width: 72px;
+  min-width: 0;
+  padding: var(--space-1) 0.35rem;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+.filter-bar input[type="number"]::-webkit-outer-spin-button,
+.filter-bar input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.filter-bar input[type="number"]::placeholder {
+  color: var(--text-muted);
 }
 .filter-bar input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(0.5);
@@ -830,6 +846,9 @@ select {
     min-width: 60px;
     font-size: var(--text-sm);
     height: 30px;
+  }
+  .filter-bar input[type="number"] {
+    width: 64px;
   }
   .post-item {
     padding: var(--space-3) 0;

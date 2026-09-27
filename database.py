@@ -63,7 +63,8 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_posts_num_comments ON posts(num_comments);
             CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc);
             CREATE INDEX IF NOT EXISTS idx_posts_subreddit_score ON posts(subreddit, score);
-            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_comments ON posts(subreddit, num_comments);
+            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_score_cmt ON posts(subreddit, score, num_comments);
+            CREATE INDEX IF NOT EXISTS idx_posts_score_cmt ON posts(score, num_comments);
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 post_id TEXT NOT NULL UNIQUE,
@@ -191,7 +192,24 @@ def get_stats():
         conn.close()
 
 
-def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc", limit=100, q=None, page=1):
+def _min_filter_clauses(alias, min_score, min_comments):
+    """Return (clauses, params) for minimum score/comment thresholds.
+
+    None means "no filter" and emits no clause. 0 is a real filter and emits
+    `>= 0`, which differs from no filter whenever the column holds negatives.
+    """
+    clauses = []
+    params = []
+    if min_score is not None:
+        clauses.append(f" AND {alias}score >= ?")
+        params.append(min_score)
+    if min_comments is not None:
+        clauses.append(f" AND {alias}num_comments >= ?")
+        params.append(min_comments)
+    return clauses, params
+
+
+def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc", limit=100, q=None, page=1, min_score=None, min_comments=None):
     conn = get_connection()
     try:
         where = " WHERE 1=1"
@@ -206,6 +224,10 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc",
         if end_date:
             where += " AND created_utc < ?"
             params.append(end_date)
+        clauses, clause_params = _min_filter_clauses("", min_score, min_comments)
+        for c in clauses:
+            where += c
+        params.extend(clause_params)
         clause, param = _title_search_clause("", q)
         if clause:
             where += clause
@@ -305,7 +327,7 @@ def get_bookmark_ids_for(post_ids):
         conn.close()
 
 
-def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=None, end_date=None, q=None):
+def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=None, end_date=None, q=None, min_score=None, min_comments=None):
     conn = get_connection()
     try:
         where = """
@@ -324,6 +346,10 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
         if end_date:
             where += " AND p.created_utc < ?"
             params.append(end_date)
+        clauses, clause_params = _min_filter_clauses("p.", min_score, min_comments)
+        for c in clauses:
+            where += c
+        params.extend(clause_params)
         clause, param = _title_search_clause("p.", q)
         if clause:
             where += clause
