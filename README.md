@@ -38,7 +38,7 @@ Or scrape a specific subreddit (any subreddit works, not just the ones in config
 python scraper.py programming
 ```
 
-The first run fetches all posts from the subreddit's earliest available date to present (~1–2 min/subreddit). Subsequent runs resume from the most recently stored post — interruption does not cause data loss.
+The first run performs a full backfill from the subreddit's earliest available date. Saturated 30-day windows are split into smaller UTC windows until every window is complete. Subsequent runs resume from a durable per-subreddit checkpoint and recheck a 48-hour overlap; interruptions do not advance the checkpoint past an incomplete window.
 
 ### 3. View posts in the browser
 
@@ -71,11 +71,16 @@ python scraper.py unixporn         # Scrape a specific subreddit
 The scraper:
 
 - Connects to the Arctic Shift API (`arctic-shift.photon-reddit.com`)
-- Starts from today and works backwards dynamically — no pre-scan phase
-- Automatically widens time windows for sparse regions, narrows for dense ones
+- Uses exact UTC timestamps and sequential requests with a one-second delay
+- Starts with 30-day windows and splits any window that returns the 100-post API cap
+- Stops safely with an explicit error if a one-hour window still saturates
 - Stores posts in `reddit_archive.db` using batch `INSERT OR IGNORE` (no duplicates)
-- Resumes from the most recently stored post on subsequent runs
-- Handles API timeouts with automatic retry/backoff (2 retries, 15s timeout)
+- Persists a durable per-subreddit checkpoint after every complete window
+- Rechecks the last 48 hours on resumed runs to catch recently archived posts
+- Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
+- Waits 20 seconds for query-timeout `422` responses, then splits the window if needed
+- Logs HTTP status, response summary, and rate-limit reset headers for API failures
+- Stops the run on an unrecoverable API error instead of silently skipping a window
 - **One Ctrl+C stops the entire scrape** — no need to interrupt subreddit-by-subreddit
 
 ### Web App (`server.py`)
@@ -137,13 +142,16 @@ SUBREDDITS = [
     "opencodeCLI", "OpenModels", "opensource", "PiCodingAgent", "Rainmeter",
     "selfhosted", "termux", "unixporn", "vibecoding", "web_design"
 ]
-REQUEST_DELAY = 0.35          # Seconds between API requests (~2.8 req/s)
+REQUEST_DELAY = 1.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 15           # API request timeout
 MAX_RETRIES = 2               # Retry attempts on failure
 BACKOFF_FACTOR = 2.0          # Exponential backoff factor
 DB_PATH = "reddit_archive.db" # SQLite database file
-START_YEAR = 2005             # Fallback year if no resume data found
-POSTS_PER_REQUEST = 100       # Max allowed by API per request
+START_YEAR = 2005             # Earliest year checked during full backfill
+POSTS_PER_REQUEST = 100       # Maximum requested from the API
+MIN_SCRAPE_WINDOW_HOURS = 1   # Stop splitting a saturated window below this width
+QUERY_TIMEOUT_RETRY_DELAY = 20 # Wait before retrying a query-timeout 422
+RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
 
 The scraper accepts **any** subreddit as a command-line argument, not just the ones in `SUBREDDITS`.
@@ -171,7 +179,15 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | `post_id`    | Reference to post (unique)    |
 | `created_at` | When the bookmark was created |
 
-Resume logic: `SELECT MAX(created_utc) FROM posts WHERE subreddit = ?` determines where to resume. `INSERT OR IGNORE` on the `url` field prevents duplicates.
+### Scrape State Table
+
+| Field        | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `subreddit`  | Subreddit name (primary key)                    |
+| `next_start` | First timestamp not yet covered by a full window |
+| `updated_at` | When the checkpoint was last advanced           |
+
+The scraper state is stored in the `scrape_state` table. `next_start` is the first timestamp not yet covered by a complete window; it advances only after the corresponding posts have been inserted. `INSERT OR IGNORE` on the `url` field prevents duplicates from boundary overlap and resumed requests.
 
 ## Data Source
 
@@ -194,7 +210,7 @@ Resume logic: `SELECT MAX(created_utc) FROM posts WHERE subreddit = ?` determine
 ```text
 redfetcher-v2/
 ├── config.py          # Settings: subreddit list, API config, request delay
-├── database.py        # SQLite init, batch insert, query helpers, bookmarks
+├── database.py        # SQLite init, batch insert, query helpers, bookmarks, scrape state
 ├── scraper.py         # Arctic Shift scraping logic (standalone)
 ├── server.py          # FastAPI web app — routes, templates, bookmarks (standalone)
 ├── sql.py             # CLI SQL query tool for reddit_archive.db
@@ -215,11 +231,11 @@ redfetcher-v2/
 
 ## Troubleshooting
 
-- **API timeouts**: Arctic Shift is community-maintained. Re-run the scraper; it has built-in retry/backoff.
+- **API timeouts**: Arctic Shift is community-maintained. Re-run the scraper; it has built-in retry/backoff and reports the HTTP status, response summary, and rate-limit reset when the API is unavailable.
 - **No posts showing**: Run `python scraper.py` first, then `python server.py`.
 - **Import error**: Ensure `arcshiftwrap` is installed (`pip install arcshiftwrap`). Import path is `arcshiftwrap.arctic_shift`, not `arcshiftwrap`.
 - **Database locked**: Close any other connections to `reddit_archive.db`.
-- **Slow scraping**: The first run for a new subreddit takes 1–2 minutes to find the earliest post date. Subsequent runs resume from where they left off.
+- **Slow scraping**: Full backfills make more API requests for dense subreddits; the scraper stays sequential and one request per second. Resumed runs recheck only the checkpoint plus the configured overlap.
 - **Ctrl+C stops the entire scrape**: No need to interrupt subreddit-by-subreddit.
 - **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button (🪖) on any post card to toggle bookmarks.
 
@@ -227,12 +243,14 @@ redfetcher-v2/
 
 ### Scraping Flow
 
-1. Check `MAX(created_utc)` for the subreddit in the database
-2. If found, resume from that date (fast — only fetches new posts)
-3. If not found, find the earliest year with posts via yearly scan (`find_start_year`)
-4. Automatically widens time windows for empty regions, narrows for dense ones
-5. Stops after 2 consecutive empty windows (no posts found)
-6. Batch inserts using `executemany` for fast database writes
+1. Read the durable `scrape_state.next_start` checkpoint for the subreddit
+2. If a checkpoint exists, resume 48 hours before it to catch late-arriving archive data
+3. If no checkpoint exists, find the earliest year with posts via yearly scan (`find_start_year`)
+4. Request 30-day UTC windows with `limit=100`
+5. Split every saturated window recursively until each child is below the limit
+6. Stop safely if a one-hour window still returns the limit
+7. Batch insert each complete result, then advance the checkpoint only after insertion
+8. Stop the run on API failure without advancing past the failed window
 
 ### URL Handling
 

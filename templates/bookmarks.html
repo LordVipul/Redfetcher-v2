@@ -67,7 +67,7 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
         <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
         <span class="r-action">
-            <button class="bookmark-btn is-active" data-post-id="{{ post.id }}" title="Remove bookmark" aria-pressed="true" aria-label="Remove bookmark">
+            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}">
                 <i class="fa-solid fa-bookmark"></i>
             </button>
         </span>
@@ -99,7 +99,7 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
     <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
     {% endif %}
     <div class="jump">
-        <input type="number" min="1" max="{{ total_pages }}" placeholder="{{ total_pages }}" id="jump-page" />
+        <input type="number" min="1" max="{{ total_pages }}" placeholder="{{ total_pages }}" id="jump-page" aria-label="Jump to page" />
     </div>
 </div>
 {% endif %}

@@ -101,63 +101,128 @@
   window.formatDate = formatDate;
   window.escapeHtml = escapeHtml;
 
+  function setBookmarkButtonState(btn, active) {
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    var label = active ? "Remove bookmark" : "Bookmark this post";
+    btn.setAttribute("title", label);
+    btn.setAttribute("aria-label", label);
+  }
+
+  function isBookmarksPage() {
+    return window.location.pathname === "/bookmarks";
+  }
+
+  function updateBookmarksCount(delta) {
+    var countEl = document.querySelector(".bookmarks-bar .count");
+    if (!countEl) return;
+    var m = countEl.textContent.match(/\d+/);
+    if (!m) return;
+    countEl.textContent = parseInt(m[0], 10) + delta + " saved";
+  }
+
+  function showFeedError(message, retry) {
+    var feed = document.getElementById("post-feed");
+    if (!feed) return false;
+    feed.classList.remove("fading");
+    feed.innerHTML =
+      '<div class="empty-state" role="alert">' +
+      '<div class="icon"><i class="fa-solid fa-triangle-exclamation"></i></div>' +
+      "<h2>" +
+      message +
+      "</h2>" +
+      "<p>Check your connection and try again.</p>" +
+      '<button type="button" class="retry-btn">Retry</button>' +
+      "</div>";
+    var btn = feed.querySelector(".retry-btn");
+    if (btn) {
+      btn.addEventListener("click", retry);
+      btn.focus();
+    }
+    return true;
+  }
+
+  // Per-page membership policy: a row stays iff it still belongs to the list.
+  var BOOKMARK_POLICY = {
+    // /posts — membership is "matches filters", never affected by bookmark state
+    feed: function (postId, nowBookmarked, btn) {
+      if (btn) setBookmarkButtonState(btn, nowBookmarked);
+    },
+    // /bookmarks — membership IS the bookmark set
+    bookmarks: function (postId, nowBookmarked, btn) {
+      if (nowBookmarked) {
+        reloadBookmarksFeed(); // re-inserts the row + count from server
+        return;
+      }
+      var row = btn && btn.closest(".post-item");
+      if (row) {
+        row.style.transition = "opacity 0.15s ease";
+        row.style.opacity = "0";
+        setTimeout(function () {
+          if (row.parentNode) row.remove();
+          var feed = document.getElementById("post-feed");
+          if (feed && !feed.querySelector(".post-item")) {
+            reloadBookmarksFeed(); // last item removed — let it render the empty state
+          }
+        }, 150);
+        updateBookmarksCount(-1);
+      } else {
+        reloadBookmarksFeed(); // row already gone — let server reconcile count
+      }
+    },
+  };
+
+  function syncBookmarkUI(postId, nowBookmarked, btn) {
+    if (window.__bookmarked) {
+      if (nowBookmarked) {
+        if (window.__bookmarked.indexOf(postId) === -1) {
+          window.__bookmarked.push(postId);
+        }
+      } else {
+        window.__bookmarked = window.__bookmarked.filter(function (id) {
+          return id !== postId;
+        });
+      }
+    }
+    if (!btn) {
+      btn = document.querySelector(
+        '.bookmark-btn[data-post-id="' + postId + '"]',
+      );
+    }
+    var policy = isBookmarksPage()
+      ? BOOKMARK_POLICY.bookmarks
+      : BOOKMARK_POLICY.feed;
+    policy(postId, nowBookmarked, btn);
+  }
+
   // ── Bookmark Toggle ────────────────────────────
   document.addEventListener("click", function (e) {
     var btn = e.target.closest(".bookmark-btn[data-post-id]");
     if (!btn || btn.classList.contains("busy")) return;
     btn.classList.add("busy");
     var postId = btn.dataset.postId;
-    var isActive = btn.classList.contains("is-active");
-    var isBookmarksPage = window.location.pathname === "/bookmarks";
-    var method = isActive ? "DELETE" : "POST";
-    fetch("/bookmarks/" + postId, { method: method })
+    var nowBookmarked = !btn.classList.contains("is-active");
+    fetch("/bookmarks/" + postId, {
+      method: nowBookmarked ? "POST" : "DELETE",
+    })
       .then(function (res) {
         return res.ok;
       })
       .then(function (ok) {
         if (!ok) throw new Error();
-        if (isActive) {
-          if (isBookmarksPage) {
-            btn.closest(".post-item").style.transition = "opacity 0.15s ease";
-            btn.closest(".post-item").style.opacity = "0";
-            setTimeout(function () {
-              if (btn.closest(".post-item")) btn.closest(".post-item").remove();
-            }, 150);
-          } else {
-            btn.classList.remove("is-active");
-          }
-          toastWithUndo(
-            "Bookmark removed",
-            "info",
-            undoBookmark(postId, "add"),
-          );
-        } else {
-          if (isBookmarksPage) {
-            reloadBookmarksFeed();
-          } else {
-            btn.classList.add("is-active");
-          }
+        syncBookmarkUI(postId, nowBookmarked, btn);
+        if (nowBookmarked) {
           toastWithUndo(
             "Bookmarked",
             "success",
             undoBookmark(postId, "remove"),
           );
-        }
-        if (window.__bookmarked) {
-          if (isActive) {
-            window.__bookmarked = window.__bookmarked.filter(function (id) {
-              return id !== postId;
-            });
-          } else {
-            window.__bookmarked.push(postId);
-          }
-        }
-        if (isBookmarksPage) {
-          var countEl = document.querySelector(".bookmarks-bar .count");
-          if (countEl) {
-            var total = parseInt(countEl.textContent.match(/\d+/)[0]);
-            countEl.textContent = (isActive ? total - 1 : total + 1) + " saved";
-          }
+        } else {
+          toastWithUndo(
+            "Bookmark removed",
+            "info",
+            undoBookmark(postId, "add"),
+          );
         }
       })
       .catch(function () {
@@ -170,30 +235,97 @@
 
   function undoBookmark(postId, action) {
     return function () {
-      var method = action === "add" ? "POST" : "DELETE";
-      fetch("/bookmarks/" + postId, { method: method })
+      var nowBookmarked = action === "add";
+      fetch("/bookmarks/" + postId, {
+        method: nowBookmarked ? "POST" : "DELETE",
+      })
         .then(function (res) {
           return res.ok;
         })
         .then(function (ok) {
           if (!ok) throw new Error();
-          if (window.location.pathname === "/bookmarks") {
-            reloadBookmarksFeed();
-          }
-          if (window.__bookmarked) {
-            if (action === "add") {
-              window.__bookmarked.push(postId);
-            } else {
-              window.__bookmarked = window.__bookmarked.filter(function (id) {
-                return id !== postId;
-              });
-            }
-          }
+          syncBookmarkUI(postId, nowBookmarked, null);
         })
         .catch(function () {
           toast("Failed to undo", "error");
         });
     };
+  }
+
+  function renderPost(post, isBookmarked) {
+    var url =
+      post.url && post.url.startsWith("http")
+        ? post.url
+        : "https://www.reddit.com" + (post.url || "");
+    var title = escapeHtml(post.title);
+    var date = formatDate(post.created_utc);
+    var badge =
+      '<a href="/posts?subreddit=' +
+      encodeURIComponent(post.subreddit || "") +
+      '" class="r-badge">r/' +
+      escapeHtml(post.subreddit || "") +
+      "</a>";
+    var score =
+      '<span class="r-score"><i class="fa-solid fa-arrow-up"></i> ' +
+      (post.score || 0) +
+      "</span>";
+    var comments =
+      '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' +
+      (post.num_comments || 0) +
+      "</span>";
+    var dt = '<span class="post-date">' + date + "</span>";
+    var cls = isBookmarked ? " is-active" : "";
+    var pressed = isBookmarked ? "true" : "false";
+    var btn =
+      '<button class="bookmark-btn' +
+      cls +
+      '" data-post-id="' +
+      escapeHtml(post.id || "") +
+      '" title="' +
+      (isBookmarked ? "Remove bookmark" : "Bookmark this post") +
+      '" aria-pressed="' +
+      pressed +
+      '" aria-label="' +
+      (isBookmarked ? "Remove bookmark" : "Bookmark this post") +
+      '"><i class="fa-solid fa-bookmark"></i></button>';
+    return (
+      '<div class="post-item" role="listitem" data-post-id="' +
+      escapeHtml(post.id || "") +
+      '">' +
+      badge +
+      '<div class="post-title"><a href="' +
+      escapeHtml(url) +
+      '" target="_blank" rel="noopener" title="' +
+      escapeHtml(title) +
+      '">' +
+      title +
+      "</a></div>" +
+      dt +
+      score +
+      comments +
+      '<span class="r-action">' +
+      btn +
+      "</span>" +
+      "</div>"
+    );
+  }
+
+  function updateSortInfoBar(total) {
+    var si = document.getElementById("sort-info");
+    if (!si) return;
+    if (total <= 0) {
+      si.style.display = "none";
+      return;
+    }
+    var tp = Math.max(1, Math.ceil(total / 50));
+    si.style.display = "";
+    si.innerHTML =
+      "<strong>" +
+      total +
+      "</strong> bookmark" +
+      (total !== 1 ? "s" : "") +
+      " &middot; page 1 of " +
+      tp;
   }
 
   function reloadBookmarksFeed() {
@@ -209,50 +341,25 @@
               '<div class="empty-state"><div class="icon"><i class="fa-regular fa-bookmark"></i></div><h2>No bookmarks yet</h2><p>Browse the <a href="/posts">posts feed</a> and save what interests you.</p></div>';
             var pag = document.getElementById("pagination");
             if (pag) pag.innerHTML = "";
+            updateSortInfoBar(0);
+            var countEl0 = document.querySelector(".bookmarks-bar .count");
+            if (countEl0) countEl0.textContent = data.total + " saved";
             return;
           }
           feed.innerHTML = data.posts
             .map(function (p) {
-              var url =
-                p.url && p.url.startsWith("http")
-                  ? p.url
-                  : "https://www.reddit.com" + p.url;
-              return (
-                '<div class="post-item" role="listitem" data-post-id="' +
-                p.id +
-                '">' +
-                '<a href="/posts?subreddit=' +
-                encodeURIComponent(p.subreddit || "") +
-                '" class="r-badge">r/' +
-                p.subreddit +
-                "</a>" +
-                '<div class="post-title"><a href="' +
-                url +
-                '" target="_blank" rel="noopener">' +
-                p.title +
-                "</a></div>" +
-                '<span class="post-date">' +
-                formatDate(p.created_utc) +
-                "</span>" +
-                '<span class="r-score"><i class="fa-solid fa-arrow-up"></i> ' +
-                p.score +
-                "</span>" +
-                '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' +
-                p.num_comments +
-                "</span>" +
-                '<span class="r-action"><button class="bookmark-btn is-active" data-post-id="' +
-                p.id +
-                '" title="Remove bookmark" aria-pressed="true" aria-label="Remove bookmark"><i class="fa-solid fa-bookmark"></i></button></span>' +
-                "</div>"
-              );
+              return renderPost(p, true);
             })
             .join("");
         }
         var countEl = document.querySelector(".bookmarks-bar .count");
         if (countEl) countEl.textContent = data.total + " saved";
+        updateSortInfoBar(data.total);
       })
       .catch(function () {
-        toast("Failed to reload bookmarks", "error");
+        if (!showFeedError("Couldn't load bookmarks", reloadBookmarksFeed)) {
+          toast("Failed to reload bookmarks", "error");
+        }
       });
   }
 
@@ -277,64 +384,6 @@
 
     function getTotalPages(t, l) {
       return l > 0 ? Math.ceil(t / l) : 1;
-    }
-
-    function renderPost(post, isBookmarked) {
-      var url =
-        post.url && post.url.startsWith("http")
-          ? post.url
-          : "https://www.reddit.com" + (post.url || "");
-      var title = escapeHtml(post.title);
-      var date = formatDate(post.created_utc);
-      var badge =
-        '<a href="/posts?subreddit=' +
-        encodeURIComponent(post.subreddit || "") +
-        '" class="r-badge">r/' +
-        escapeHtml(post.subreddit || "") +
-        "</a>";
-      var score =
-        '<span class="r-score"><i class="fa-solid fa-arrow-up"></i> ' +
-        (post.score || 0) +
-        "</span>";
-      var comments =
-        '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' +
-        (post.num_comments || 0) +
-        "</span>";
-      var dt = '<span class="post-date">' + date + "</span>";
-      var cls = isBookmarked ? " is-active" : "";
-      var pressed = isBookmarked ? "true" : "false";
-      var btn =
-        '<button class="bookmark-btn' +
-        cls +
-        '" data-post-id="' +
-        escapeHtml(post.id || "") +
-        '" title="' +
-        (isBookmarked ? "Remove bookmark" : "Bookmark this post") +
-        '" aria-pressed="' +
-        pressed +
-        '" aria-label="' +
-        (isBookmarked ? "Remove bookmark" : "Bookmark this post") +
-        '"><i class="fa-solid fa-bookmark"></i></button>';
-      return (
-        '<div class="post-item" data-post-id="' +
-        escapeHtml(post.id || "") +
-        '">' +
-        badge +
-        '<div class="post-title"><a href="' +
-        escapeHtml(url) +
-        '" target="_blank" rel="noopener" title="' +
-        escapeHtml(title) +
-        '">' +
-        title +
-        "</a></div>" +
-        dt +
-        score +
-        comments +
-        '<span class="r-action">' +
-        btn +
-        "</span>" +
-        "</div>"
-      );
     }
 
     function renderFeed(posts, bookmarked) {
@@ -426,12 +475,12 @@
       }
       // Jump input
       html += '<div class="jump">';
-      html +=
-        '<input type="number" min="1" max="' +
-        tp +
-        '" placeholder="' +
-        tp +
-        '" id="jump-page" />';
+    html +=
+      '<input type="number" min="1" max="' +
+      tp +
+      '" placeholder="' +
+      tp +
+      '" id="jump-page" aria-label="Jump to page" />';
       html += "</div>";
 
       pag.innerHTML = html;
@@ -459,6 +508,13 @@
 
     function hideSpinner() {
       if (spinner) spinner.classList.remove("visible");
+    }
+
+    function focusResultsStatus() {
+      var el = document.getElementById("sort-info") || document.getElementById("post-feed");
+      if (!el) return;
+      if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+      el.focus();
     }
 
     function fetchAndUpdate(page) {
@@ -490,6 +546,15 @@
         .then(function (data) {
           total = data.total;
           var tp = getTotalPages(total, f.limit);
+          // capture pagination focus before innerHTML destroys the node
+          var active = document.activeElement;
+          var restoreJump = false;
+          var restorePage = null;
+          if (active && active.closest && active.closest("#pagination")) {
+            if (active.id === "jump-page") restoreJump = true;
+            else if (active.dataset && active.dataset.page) restorePage = active.dataset.page;
+            else restorePage = String(f.page);
+          }
           if (data.bookmarked_ids) {
             var returned = {};
             data.posts.forEach(function (p) {
@@ -504,13 +569,30 @@
           renderFeed(data.posts, window.__bookmarked || []);
           updateSortInfo(total, f.page, tp);
           updatePagination(f.page, tp, f);
+          if (restoreJump) {
+            var jump = document.getElementById("jump-page");
+            if (jump) jump.focus();
+            else focusResultsStatus();
+          } else if (restorePage !== null) {
+            var link = document.querySelector(
+              '#pagination .js-page[data-page="' + restorePage + '"]',
+            );
+            if (link) link.focus();
+            else focusResultsStatus();
+          }
           var label = isBookmarks ? "bookmark" : "post";
           announceResults(total, label);
           hideSpinner();
           if (feed) feed.classList.remove("fading");
         })
         .catch(function () {
-          toast("Failed to load posts", "error");
+          if (
+            !showFeedError("Couldn't load posts", function () {
+              fetchAndUpdate(f.page);
+            })
+          ) {
+            toast("Failed to load posts", "error");
+          }
           hideSpinner();
           if (feed) feed.classList.remove("fading");
         });
@@ -625,9 +707,10 @@
         ))
     ) {
       e.preventDefault();
+      // #filter-q exists only on pages that hide .header-search — prefer the visible input
       var searchInput =
-        document.getElementById("header-search-input") ||
-        document.getElementById("filter-q");
+        document.getElementById("filter-q") ||
+        document.getElementById("header-search-input");
       if (searchInput) searchInput.focus();
     }
   });

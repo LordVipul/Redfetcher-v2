@@ -5,12 +5,11 @@
 %}
   {% if stats|length > 0 %}
     <div class="section-label" role="heading" aria-level="2">Communities</div>
-    <div class="card-grid" role="list">
+    <div class="card-grid">
       {% for s in stats %}
         <a
           href="/posts?subreddit={{ s.subreddit }}"
           class="community-card"
-          role="listitem"
           aria-label="r/{{ s.subreddit }}, {{ s.count }} posts"
         >
           <span class="community-name">r/{{ s.subreddit }}</span>

@@ -41,6 +41,11 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_bookmarks_post_id ON bookmarks(post_id);
             CREATE INDEX IF NOT EXISTS idx_bookmarks_created ON bookmarks(created_at);
+            CREATE TABLE IF NOT EXISTS scrape_state (
+                subreddit TEXT PRIMARY KEY,
+                next_start REAL NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
                 title,
                 content='posts',
@@ -107,6 +112,38 @@ def get_max_created_utc(subreddit):
             "SELECT MAX(created_utc) FROM posts WHERE subreddit = ?", (subreddit,)
         ).fetchone()
         return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def get_scrape_state(subreddit):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT next_start FROM scrape_state WHERE subreddit = ?", (subreddit,)
+        ).fetchone()
+        return row["next_start"] if row else None
+    finally:
+        conn.close()
+
+
+def advance_scrape_state(subreddit, next_start):
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO scrape_state (subreddit, next_start) VALUES (?, ?)
+            ON CONFLICT(subreddit) DO UPDATE SET
+                next_start = CASE
+                    WHEN scrape_state.next_start < excluded.next_start
+                    THEN excluded.next_start
+                    ELSE scrape_state.next_start
+                END,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (subreddit, next_start),
+        )
+        conn.commit()
     finally:
         conn.close()
 

@@ -12,6 +12,8 @@
   --text: #d8d5cf;
   --text-muted: #7e7b76;
   --accent: #e85d3a;
+  --toast-success: #4ade80;
+  --toast-error: #ef4444;
   --radius: 4px;
   --radius-sm: 3px;
   --font-display: "Sora", sans-serif;
@@ -655,6 +657,22 @@ select {
   font-size: var(--text-sm);
   color: var(--accent);
   border-radius: var(--radius-sm);
+}
+.empty-state .retry-btn {
+  margin-top: var(--space-3);
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity var(--transition);
+}
+.empty-state .retry-btn:hover {
+  opacity: 0.85;
 }
 
 /* ── Bookmarks Bar ────────────────────────── */
