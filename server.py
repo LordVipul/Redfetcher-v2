@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import config
 import database
 
@@ -40,6 +40,15 @@ def to_timestamp(date_str):
     return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp()
 
 
+def to_end_timestamp(date_str):
+    if not date_str:
+        return None
+    parsed = datetime.fromisoformat(date_str)
+    if len(date_str.strip()) == 10:
+        parsed += timedelta(days=1)
+    return parsed.replace(tzinfo=timezone.utc).timestamp()
+
+
 # ── Input validation ─────────────────────────────────────────
 
 SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
@@ -58,10 +67,10 @@ def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, al
         return f"q must be between {Q_MIN_LEN} and {Q_MAX_LEN} characters"
     try:
         start_ts = to_timestamp(start)
-        end_ts = to_timestamp(end)
+        end_ts = to_end_timestamp(end)
     except (ValueError, OverflowError):
         return "invalid date: start and end must be ISO format (e.g. 2024-01-31)"
-    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+    if start_ts is not None and end_ts is not None and start_ts >= end_ts:
         return "invalid date range: start must be before end"
     return None
 
@@ -130,7 +139,7 @@ async def posts(
         return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_posts,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
     )
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
@@ -167,7 +176,7 @@ async def api_posts(
         return bad_request(err)
     results, total = await asyncio.to_thread(
         database.get_posts,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end),
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
     )
     log.info(f"GET /api/posts — {len(results)} posts returned")
@@ -200,7 +209,7 @@ async def bookmarks(
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end), q=q,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
@@ -234,7 +243,7 @@ async def api_bookmarks(
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_timestamp(end), q=q,
+        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
     )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
     return {"posts": results, "total": total, "bookmarked_ids": [p["id"] for p in results]}

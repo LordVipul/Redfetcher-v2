@@ -172,7 +172,7 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc",
             where += " AND created_utc >= ?"
             params.append(start_date)
         if end_date:
-            where += " AND created_utc <= ?"
+            where += " AND created_utc < ?"
             params.append(end_date)
         clause, param = _title_search_clause("", q)
         if clause:
@@ -299,7 +299,7 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
             where += " AND p.created_utc >= ?"
             params.append(start_date)
         if end_date:
-            where += " AND p.created_utc <= ?"
+            where += " AND p.created_utc < ?"
             params.append(end_date)
         clause, param = _title_search_clause("p.", q)
         if clause:
@@ -354,7 +354,7 @@ def get_bookmarks_count(subreddit=None, start_date=None, end_date=None, q=None):
             query += " AND p.created_utc >= ?"
             params.append(start_date)
         if end_date:
-            query += " AND p.created_utc <= ?"
+            query += " AND p.created_utc < ?"
             params.append(end_date)
         clause, param = _title_search_clause("p.", q)
         if clause:
