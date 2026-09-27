@@ -411,6 +411,11 @@ select {
 .filter-bar .field-search input::placeholder {
   color: var(--text-muted);
 }
+.filter-bar .field-hint {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  min-height: 1em;
+}
 
 /* ── Sort Info ────────────────────────────────── */
 .sort-info {

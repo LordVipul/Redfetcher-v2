@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta, timezone
@@ -63,7 +63,7 @@ def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, al
         return f"invalid subreddit name: {subreddit!r}"
     if sort is not None and allowed_sorts is not None and sort not in allowed_sorts:
         return f"invalid sort: {sort!r} (allowed: {', '.join(sorted(allowed_sorts))})"
-    if q is not None and not (Q_MIN_LEN <= len(q) <= Q_MAX_LEN):
+    if q not in (None, "") and not (Q_MIN_LEN <= len(q) <= Q_MAX_LEN):
         return f"q must be between {Q_MIN_LEN} and {Q_MAX_LEN} characters"
     try:
         start_ts = to_timestamp(start)
@@ -94,6 +94,12 @@ def query_params(page, filters=None):
 
 
 templates.env.globals["query_params"] = query_params
+
+
+def redirect_to_page(path, page, filters):
+    return RedirectResponse(url=f"{path}?{query_params(page, filters)}", status_code=302)
+
+
 templates.env.globals["abs"] = abs
 # ── Shared context ───────────────────────────────────────────
 
@@ -144,6 +150,12 @@ async def posts(
     )
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
+    if page > total_pages:
+        return redirect_to_page(
+            "/posts",
+            total_pages,
+            {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q},
+        )
     log.info(
         f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
         f"page={page}, q={'yes' if q else 'no'}, results={len(results)}, total={total}"
@@ -179,11 +191,26 @@ async def api_posts(
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
     )
+    total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
+    if page > total_pages:
+        page = total_pages
+        if total > 0:
+            results, total = await asyncio.to_thread(
+                database.get_posts,
+                subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
+                sort=sort, limit=limit, q=q, page=page,
+            )
     log.info(f"GET /api/posts — {len(results)} posts returned")
     bookmarked_ids = await asyncio.to_thread(
         database.get_bookmark_ids_for, [p["id"] for p in results]
     )
-    return {"posts": results, "total": total, "bookmarked_ids": bookmarked_ids}
+    return {
+        "posts": results,
+        "total": total,
+        "bookmarked_ids": bookmarked_ids,
+        "page": page,
+        "total_pages": total_pages,
+    }
 
 
 @app.get("/stats")
@@ -212,6 +239,12 @@ async def bookmarks(
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
+    if page > total_pages:
+        return redirect_to_page(
+            "/bookmarks",
+            total_pages,
+            {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q},
+        )
     all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     log.info(f"GET /bookmarks — subreddit={subreddit}, sort={sort}, q={'yes' if q else 'no'}, page={page}, total={total}")
     return templates.TemplateResponse(
@@ -245,8 +278,23 @@ async def api_bookmarks(
         limit=limit, offset=(page - 1) * limit, sort=sort,
         subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
     )
+    total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
+    if page > total_pages:
+        page = total_pages
+        if total > 0:
+            results, total = await asyncio.to_thread(
+                database.get_bookmarks,
+                limit=limit, offset=(page - 1) * limit, sort=sort,
+                subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+            )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
-    return {"posts": results, "total": total, "bookmarked_ids": [p["id"] for p in results]}
+    return {
+        "posts": results,
+        "total": total,
+        "bookmarked_ids": [p["id"] for p in results],
+        "page": page,
+        "total_pages": total_pages,
+    }
 
 
 @app.post("/bookmarks/{post_id}")

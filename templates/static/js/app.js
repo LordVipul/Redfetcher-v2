@@ -84,6 +84,18 @@
       .replace(/"/g, "&quot;");
   }
 
+  function buildApiQuery(filters, page) {
+    var params = new URLSearchParams();
+    if (filters.subreddit) params.set("subreddit", filters.subreddit);
+    if (filters.sort) params.set("sort", filters.sort);
+    if (filters.start) params.set("start", filters.start);
+    if (filters.end) params.set("end", filters.end);
+    if (filters.q) params.set("q", filters.q);
+    if (filters.limit) params.set("limit", filters.limit);
+    params.set("page", page || filters.page || 1);
+    return params.toString();
+  }
+
   function buildUrl(filters) {
     var params = new URLSearchParams();
     if (filters.subreddit) params.set("subreddit", filters.subreddit);
@@ -310,30 +322,63 @@
     );
   }
 
-  function updateSortInfoBar(total) {
+  function currentBookmarkQuery() {
+    return buildApiQuery(window.__filters || {}, window.__page || 1);
+  }
+
+  function replaceBookmarkPageUrl(page) {
+    var params = new URLSearchParams(window.location.search);
+    params.set("page", page);
+    window.__filters = Object.assign({}, window.__filters || {}, { page: page });
+    history.replaceState(
+      { filters: window.__filters },
+      "",
+      window.location.pathname + "?" + params.toString(),
+    );
+  }
+
+  function updateSortInfoBar(total, page, limit) {
     var si = document.getElementById("sort-info");
     if (!si) return;
     if (total <= 0) {
       si.style.display = "none";
       return;
     }
-    var tp = Math.max(1, Math.ceil(total / 50));
+    var currentPage = page || 1;
+    var pageLimit = limit || 50;
+    var tp = Math.max(1, Math.ceil(total / pageLimit));
     si.style.display = "";
     si.innerHTML =
       "<strong>" +
       total +
       "</strong> bookmark" +
       (total !== 1 ? "s" : "") +
-      " &middot; page 1 of " +
+      " &middot; page " +
+      currentPage +
+      " of " +
       tp;
   }
 
   function reloadBookmarksFeed() {
-    fetch("/api/bookmarks?limit=50&sort=oldest")
+    var requestedPage = window.__page || 1;
+    fetch("/api/bookmarks?" + currentBookmarkQuery())
       .then(function (res) {
-        return res.json();
+        return res.json().then(function (data) {
+          return { ok: res.ok, data: data };
+        });
       })
-      .then(function (data) {
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error(
+            (response.data && response.data.error) || "Failed to load bookmarks",
+          );
+        }
+        var data = response.data;
+        var currentPage = data.page || requestedPage;
+        var currentLimit = (window.__filters && window.__filters.limit) || 50;
+        window.__page = currentPage;
+        if (currentPage !== requestedPage) replaceBookmarkPageUrl(currentPage);
+
         var feed = document.getElementById("post-feed");
         if (feed) {
           if (data.posts.length === 0) {
@@ -341,9 +386,9 @@
               '<div class="empty-state"><div class="icon"><i class="fa-regular fa-bookmark"></i></div><h2>No bookmarks yet</h2><p>Browse the <a href="/posts">posts feed</a> and save what interests you.</p></div>';
             var pag = document.getElementById("pagination");
             if (pag) pag.innerHTML = "";
-            updateSortInfoBar(0);
-            var countEl0 = document.querySelector(".bookmarks-bar .count");
-            if (countEl0) countEl0.textContent = data.total + " saved";
+            updateSortInfoBar(0, currentPage, currentLimit);
+            var emptyCount = document.querySelector(".bookmarks-bar .count");
+            if (emptyCount) emptyCount.textContent = data.total + " saved";
             return;
           }
           feed.innerHTML = data.posts
@@ -354,11 +399,11 @@
         }
         var countEl = document.querySelector(".bookmarks-bar .count");
         if (countEl) countEl.textContent = data.total + " saved";
-        updateSortInfoBar(data.total);
+        updateSortInfoBar(data.total, currentPage, currentLimit);
       })
-      .catch(function () {
+      .catch(function (error) {
         if (!showFeedError("Couldn't load bookmarks", reloadBookmarksFeed)) {
-          toast("Failed to reload bookmarks", "error");
+          toast(error.message || "Failed to reload bookmarks", "error");
         }
       });
   }
@@ -380,7 +425,26 @@
       },
       window.__filters || {},
     );
+    filters.page = window.__page || 1;
     var total = window.__total || 0;
+    var Q_MIN_LEN = 2;
+
+    function setSearchHint(visible) {
+      var hint = document.getElementById("filter-q-hint");
+      if (hint) hint.hidden = !visible;
+    }
+
+    function isSearchTooShort(value) {
+      return value.length > 0 && value.length < Q_MIN_LEN;
+    }
+
+    function replaceFilterUrl() {
+      history.replaceState(
+        { filters: Object.assign({}, filters, { page: filters.page || 1 }) },
+        "",
+        buildUrl(filters),
+      );
+    }
 
     function getTotalPages(t, l) {
       return l > 0 ? Math.ceil(t / l) : 1;
@@ -492,7 +556,7 @@
           if (e.key === "Enter") {
             var targetPage = parseInt(jumpInput.value);
             if (targetPage > 0 && targetPage <= tp) {
-              onFilterChange(targetPage);
+              onFilterChange(targetPage, "push");
             }
             jumpInput.value = "";
           }
@@ -517,33 +581,43 @@
       el.focus();
     }
 
-    function fetchAndUpdate(page) {
+    function fetchAndUpdate(page, historyMode) {
       var f = Object.assign({}, filters, { page: page || 1 });
       showSpinner();
       var feed = document.getElementById("post-feed");
       if (feed) feed.classList.add("fading");
-      var url =
-        apiBase +
-        "?" +
-        new URLSearchParams({
-          subreddit: f.subreddit || "",
-          sort: f.sort || "oldest",
-          start: f.start || "",
-          end: f.end || "",
-          q: f.q || "",
-          limit: f.limit || 50,
-          page: f.page || 1,
-        });
+      var url = apiBase + "?" + buildApiQuery(f, f.page);
 
-      // Update URL
-      history.pushState({ filters: f }, "", buildUrl(f));
+      if (historyMode === "push") {
+        history.pushState({ filters: f }, "", buildUrl(f));
+      } else if (historyMode === "replace") {
+        history.replaceState({ filters: f }, "", buildUrl(f));
+      }
 
       // Fetch
       fetch(url)
         .then(function (res) {
-          return res.json();
+          return res.json().then(function (data) {
+            return { ok: res.ok, status: res.status, data: data };
+          });
         })
-        .then(function (data) {
+        .then(function (response) {
+          if (!response.ok) {
+            var error = new Error(
+              (response.data && response.data.error) || "Request failed",
+            );
+            error.status = response.status;
+            throw error;
+          }
+          var data = response.data;
+          var effectivePage = data.page || f.page;
+          if (effectivePage !== f.page) {
+            f.page = effectivePage;
+            filters.page = effectivePage;
+            history.replaceState({ filters: f }, "", buildUrl(f));
+          }
+          window.__filters = Object.assign({}, f);
+          window.__page = effectivePage;
           total = data.total;
           var tp = getTotalPages(total, f.limit);
           // capture pagination focus before innerHTML destroys the node
@@ -567,8 +641,8 @@
               .concat(data.bookmarked_ids);
           }
           renderFeed(data.posts, window.__bookmarked || []);
-          updateSortInfo(total, f.page, tp);
-          updatePagination(f.page, tp, f);
+          updateSortInfo(total, effectivePage, tp);
+          updatePagination(effectivePage, tp, f);
           if (restoreJump) {
             var jump = document.getElementById("jump-page");
             if (jump) jump.focus();
@@ -585,10 +659,12 @@
           hideSpinner();
           if (feed) feed.classList.remove("fading");
         })
-        .catch(function () {
-          if (
+        .catch(function (error) {
+          if (error && error.status) {
+            toast(error.message, "error");
+          } else if (
             !showFeedError("Couldn't load posts", function () {
-              fetchAndUpdate(f.page);
+              fetchAndUpdate(f.page, historyMode);
             })
           ) {
             toast("Failed to load posts", "error");
@@ -598,9 +674,13 @@
         });
     }
 
-    function onFilterChange(page) {
+    function onFilterChange(page, historyMode) {
+      if (isSearchTooShort(filters.q)) {
+        setSearchHint(true);
+        return;
+      }
       filters.page = page || 1;
-      fetchAndUpdate(filters.page);
+      fetchAndUpdate(filters.page, historyMode || "replace");
     }
 
     // Prevent form submission — let JS handle filtering via fetch
@@ -608,7 +688,14 @@
     if (filterForm) {
       filterForm.addEventListener("submit", function (e) {
         e.preventDefault();
-        onFilterChange(1);
+        if (qEl) filters.q = qEl.value;
+        if (isSearchTooShort(filters.q)) {
+          setSearchHint(true);
+          if (qEl) qEl.focus();
+          return;
+        }
+        setSearchHint(false);
+        onFilterChange(1, "replace");
       });
     }
 
@@ -622,31 +709,40 @@
     if (subredditEl)
       subredditEl.addEventListener("change", function () {
         filters.subreddit = subredditEl.value;
-        onFilterChange(1);
+        onFilterChange(1, "replace");
       });
     if (sortEl)
       sortEl.addEventListener("change", function () {
         filters.sort = sortEl.value;
-        onFilterChange(1);
+        onFilterChange(1, "replace");
       });
     if (startEl)
       startEl.addEventListener("change", function () {
         filters.start = startEl.value;
-        onFilterChange(1);
+        onFilterChange(1, "replace");
       });
     if (endEl)
       endEl.addEventListener("change", function () {
         filters.end = endEl.value;
-        onFilterChange(1);
+        onFilterChange(1, "replace");
       });
-    if (qEl)
+    if (qEl) {
       qEl.addEventListener(
         "input",
         debounce(function () {
           filters.q = qEl.value;
-          onFilterChange(1);
+          if (isSearchTooShort(filters.q)) {
+            setSearchHint(true);
+            return;
+          }
+          setSearchHint(false);
+          onFilterChange(1, "none");
         }, 200),
       );
+      qEl.addEventListener("blur", function () {
+        if (!isSearchTooShort(filters.q)) replaceFilterUrl();
+      });
+    }
 
     // Pagination: intercept clicks
     document.addEventListener("click", function (e) {
@@ -654,7 +750,7 @@
       if (link) {
         e.preventDefault();
         var page = parseInt(link.dataset.page);
-        if (page > 0) onFilterChange(page);
+        if (page > 0) onFilterChange(page, "push");
       }
       var jump = document.getElementById("jump-page");
       if (
@@ -672,7 +768,7 @@
         if (e.key === "Enter") {
           var page = parseInt(jumpInput.value);
           var tp = getTotalPages(total, filters.limit);
-          if (page > 0 && page <= tp) onFilterChange(page);
+          if (page > 0 && page <= tp) onFilterChange(page, "push");
         }
       });
     }
@@ -688,7 +784,8 @@
         if (startEl) startEl.value = f.start || "";
         if (endEl) endEl.value = f.end || "";
         if (qEl) qEl.value = f.q || "";
-        fetchAndUpdate(f.page || 1);
+        setSearchHint(isSearchTooShort(f.q || ""));
+        fetchAndUpdate(f.page || 1, "none");
       }
     });
 

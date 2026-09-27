@@ -7,7 +7,7 @@
 <h1 class="page-title">Posts</h1>
 
 <div class="filter-bar" id="filter-bar">
-    <form id="filter-form" action="/posts" method="get" role="search" aria-label="Filter posts">
+    <form id="filter-form" action="/posts" method="get" role="search" aria-label="Filter posts" novalidate>
         <div class="field">
             <label for="filter-subreddit">Subreddit</label>
             <select name="subreddit" id="filter-subreddit">
@@ -38,7 +38,8 @@
         </div>
         <div class="field field-search">
             <label for="filter-q">Search by title</label>
-            <input type="text" name="q" id="filter-q" placeholder="title…" value="{{ filters.q or '' }}" />
+            <input type="text" name="q" id="filter-q" placeholder="title…" value="{{ filters.q or '' }}" minlength="2" maxlength="100" aria-describedby="filter-q-hint" />
+            <span class="field-hint" id="filter-q-hint" role="status" aria-live="polite" hidden>Enter at least 2 characters.</span>
         </div>
     </form>
 </div>
