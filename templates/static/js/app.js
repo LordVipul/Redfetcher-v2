@@ -426,6 +426,7 @@
       window.__filters || {},
     );
     filters.page = window.__page || 1;
+    filters.q = filters.q || "";
     var total = window.__total || 0;
     var Q_MIN_LEN = 2;
 
@@ -702,6 +703,7 @@
     // Attach filter listeners
     var subredditEl = document.getElementById("filter-subreddit");
     var sortEl = document.getElementById("filter-sort");
+    var limitEl = document.getElementById("filter-limit");
     var startEl = document.getElementById("filter-start");
     var endEl = document.getElementById("filter-end");
     var qEl = document.getElementById("filter-q");
@@ -714,6 +716,11 @@
     if (sortEl)
       sortEl.addEventListener("change", function () {
         filters.sort = sortEl.value;
+        onFilterChange(1, "replace");
+      });
+    if (limitEl)
+      limitEl.addEventListener("change", function () {
+        filters.limit = parseInt(limitEl.value, 10) || 50;
         onFilterChange(1, "replace");
       });
     if (startEl)

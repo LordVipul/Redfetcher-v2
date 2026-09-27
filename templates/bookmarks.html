@@ -39,6 +39,15 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
             </select>
         </div>
         <div class="field">
+            <label for="filter-limit">Results</label>
+            <select name="limit" id="filter-limit">
+                <option value="50" {% if filters.limit|default(50) == 50 %}selected{% endif %}>50</option>
+                <option value="100" {% if filters.limit|default(50) == 100 %}selected{% endif %}>100</option>
+                <option value="200" {% if filters.limit|default(50) == 200 %}selected{% endif %}>200</option>
+                <option value="500" {% if filters.limit|default(50) == 500 %}selected{% endif %}>500</option>
+            </select>
+        </div>
+        <div class="field">
             <label for="filter-start">From date</label>
             <input type="date" name="start" id="filter-start" value="{{ filters.start or '' }}" />
         </div>

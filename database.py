@@ -6,10 +6,37 @@ import config
 def get_connection():
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-16000")
     return conn
+
+
+def migrate_bookmarks_foreign_key(conn):
+    if conn.execute("PRAGMA foreign_key_list(bookmarks)").fetchall():
+        return
+    conn.execute("DELETE FROM bookmarks WHERE post_id NOT IN (SELECT id FROM posts)")
+    conn.execute("DROP INDEX IF EXISTS idx_bookmarks_post_id")
+    conn.execute("DROP INDEX IF EXISTS idx_bookmarks_created")
+    conn.execute("ALTER TABLE bookmarks RENAME TO bookmarks_legacy")
+    conn.execute(
+        """
+        CREATE TABLE bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO bookmarks (id, post_id, created_at) "
+        "SELECT id, post_id, created_at FROM bookmarks_legacy"
+    )
+    conn.execute("DROP TABLE bookmarks_legacy")
+    conn.execute("CREATE INDEX idx_bookmarks_post_id ON bookmarks(post_id)")
+    conn.execute("CREATE INDEX idx_bookmarks_created ON bookmarks(created_at)")
 
 
 def init_db():
@@ -34,10 +61,14 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_utc);
             CREATE INDEX IF NOT EXISTS idx_posts_score ON posts(score);
             CREATE INDEX IF NOT EXISTS idx_posts_num_comments ON posts(num_comments);
+            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc);
+            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_score ON posts(subreddit, score);
+            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_comments ON posts(subreddit, num_comments);
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 post_id TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_bookmarks_post_id ON bookmarks(post_id);
             CREATE INDEX IF NOT EXISTS idx_bookmarks_created ON bookmarks(created_at);
@@ -64,6 +95,7 @@ def init_db():
             END;
             """
         )
+        migrate_bookmarks_foreign_key(conn)
         if not had_fts:
             conn.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
         conn.commit()
@@ -192,24 +224,12 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc",
         order = sort_map[sort]
         offset = (page - 1) * limit
 
-        query = (
-            f"SELECT *, COUNT(*) OVER() AS _total FROM posts{where} "
-            f"ORDER BY {order} LIMIT ? OFFSET ?"
-        )
-        rows = conn.execute(query, params + [limit, offset]).fetchall()
-
-        if rows:
-            total = rows[0]["_total"]
-            results = []
-            for r in rows:
-                d = dict(r)
-                d.pop("_total", None)
-                results.append(d)
-        else:
-            total = conn.execute(f"SELECT COUNT(*) FROM posts{where}", params).fetchone()[0]
-            results = []
-
-        return results, total
+        total = conn.execute(f"SELECT COUNT(*) FROM posts{where}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM posts{where} ORDER BY {order} LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return [dict(row) for row in rows], total
     finally:
         conn.close()
 
@@ -240,6 +260,9 @@ def get_all_subreddits():
 def add_bookmark(post_id):
     conn = get_connection()
     try:
+        exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if exists is None:
+            return False
         conn.execute("INSERT OR IGNORE INTO bookmarks (post_id) VALUES (?)", (post_id,))
         conn.commit()
         return True
@@ -318,26 +341,13 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
             raise ValueError(f"invalid sort: {sort!r}")
         order = sort_map[sort]
 
-        query = (
-            "SELECT p.*, b.created_at as bookmarked_at, COUNT(*) OVER() AS _total "
-            f"{where} ORDER BY {order} LIMIT ? OFFSET ?"
-        )
-        rows = conn.execute(query, params + [limit, offset]).fetchall()
-
-        if rows:
-            total = rows[0]["_total"]
-            results = []
-            for r in rows:
-                d = dict(r)
-                d.pop("_total", None)
-                results.append(d)
-        else:
-            total = conn.execute(
-                "SELECT COUNT(*) " + where, params
-            ).fetchone()[0]
-            results = []
-
-        return results, total
+        total = conn.execute("SELECT COUNT(*) " + where, params).fetchone()[0]
+        rows = conn.execute(
+            "SELECT p.*, b.created_at as bookmarked_at "
+            f"{where} ORDER BY {order} LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return [dict(row) for row in rows], total
     finally:
         conn.close()
 

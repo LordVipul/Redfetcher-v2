@@ -176,7 +176,7 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | Field        | Description                   |
 | ------------ | ----------------------------- |
 | `id`         | Auto-increment bookmark ID    |
-| `post_id`    | Reference to post (unique)    |
+| `post_id`    | Reference to `posts.id` (unique, cascade delete) |
 | `created_at` | When the bookmark was created |
 
 ### Scrape State Table
@@ -214,6 +214,7 @@ redfetcher-v2/
 ├── scraper.py         # Arctic Shift scraping logic (standalone)
 ├── server.py          # FastAPI web app — routes, templates, bookmarks (standalone)
 ├── sql.py             # CLI SQL query tool for reddit_archive.db
+├── fonts/             # Self-hosted Sora, DM Sans, and Font Awesome assets
 ├── templates/
 │   ├── base.html      # Layout shell with header, nav, footer
 │   ├── index.html     # Landing page: community card grid
@@ -268,6 +269,6 @@ The templates check if `post.url` already starts with `http` before prepending `
 ### Design System
 
 - **Theme**: AMOLED black (`#000000`) background, dark surface (`#0A0A0A`), red-orange accent (`#E85D3A`)
-- **Fonts**: Sora (display/headings) + DM Sans (body)
+- **Fonts**: Self-hosted Sora (display/headings) + DM Sans (body)
 - **Layout**: 1200px centered container, sticky header, footer at bottom
 - **Accessibility**: Skip-to-content link, ARIA labels, focus-visible outlines, `prefers-reduced-motion` support

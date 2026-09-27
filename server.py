@@ -22,6 +22,7 @@ log = logging.getLogger("redfetcher")
 app = FastAPI(title="RedFetcher v2")
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="templates/static"), name="static")
+app.mount("/fonts", StaticFiles(directory="fonts"), name="fonts")
 
 
 def format_date(value):
@@ -299,7 +300,10 @@ async def api_bookmarks(
 
 @app.post("/bookmarks/{post_id}")
 async def add_bookmark(post_id: str):
-    await asyncio.to_thread(database.add_bookmark, post_id)
+    added = await asyncio.to_thread(database.add_bookmark, post_id)
+    if not added:
+        log.info("POST /bookmarks/%s — post not found", post_id)
+        return JSONResponse(status_code=404, content={"error": "post not found"})
     log.info(f"POST /bookmarks/{post_id} — bookmark added")
     return JSONResponse({"status": "bookmarked", "post_id": post_id})
 

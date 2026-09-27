@@ -790,14 +790,24 @@ select {
 @media (max-width: 600px) {
   .header-inner {
     padding: var(--space-2) 1rem;
-    gap: var(--space-3);
+    gap: var(--space-2);
+  }
+  .header-search,
+  .header-cta {
+    display: none;
+  }
+  .nav {
+    min-width: 0;
+  }
+  .nav a {
+    white-space: nowrap;
   }
   .logo {
     font-size: var(--text-lg);
   }
   .nav a {
     font-size: var(--text-sm);
-    padding: var(--space-1) 0.5rem;
+    padding: var(--space-1) 0.4rem;
   }
   .header-cta {
     font-size: var(--text-xs);
