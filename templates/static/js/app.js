@@ -757,10 +757,8 @@
     if (minScoreEl || minCommentsEl) {
       [minScoreEl, minCommentsEl].forEach(function (el) {
         if (!el) return;
-        // Sanitize before reading, on every path that can change the value.
-        el.addEventListener("beforeinput", function () {
-          sanitizeMinInput(el);
-        });
+        // Sanitize after every value change: paste, and the debounced input
+        // path. keydown below blocks most bad input before it lands.
         el.addEventListener("paste", function () {
           sanitizeMinInput(el);
         });

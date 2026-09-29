@@ -7,8 +7,8 @@ A local web application that archives Reddit posts from any subreddit since its 
 - **`scraper.py`** — Standalone Python script. Fetches posts from Arctic Shift and stores them in SQLite. Run independently: `python scraper.py` or `python scraper.py <subreddit>`.
 - **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a filtered, sortable post browser at `http://localhost:8000`. Includes a bookmarks feature.
 - **`database.py`** — SQLite init, batch insert (`executemany`), query helpers, and full bookmarks CRUD.
-- **`sql.py`** — CLI tool for running read-only `SELECT` and `DELETE` queries against `reddit_archive.db`.
-- **Both scraper and server are completely separate.** The scraper handles all scraping and DB writes. The server only reads from the DB and renders HTML.
+- **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
+- **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks.
 
 ## Requirements
 
@@ -238,7 +238,6 @@ redfetcher-v2/
 ├── requirements.txt
 ├── .gitignore
 ├── reddit_archive.db  # SQLite database (created on first scrape)
-├── plan.md            # Detailed plan and research notes
 └── README.md          # This file
 ```
 

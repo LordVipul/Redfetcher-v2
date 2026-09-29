@@ -138,17 +138,6 @@ def insert_posts(posts):
         conn.close()
 
 
-def get_max_created_utc(subreddit):
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT MAX(created_utc) FROM posts WHERE subreddit = ?", (subreddit,)
-        ).fetchone()
-        return row[0] if row else None
-    finally:
-        conn.close()
-
-
 def get_scrape_state(subreddit):
     conn = get_connection()
     try:
@@ -209,7 +198,7 @@ def _min_filter_clauses(alias, min_score, min_comments):
     return clauses, params
 
 
-def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc", limit=100, q=None, page=1, min_score=None, min_comments=None):
+def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", limit=100, q=None, page=1, min_score=None, min_comments=None):
     conn = get_connection()
     try:
         where = " WHERE 1=1"
@@ -256,18 +245,6 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="score_desc",
         conn.close()
 
 
-def get_total_count(subreddit=None):
-    conn = get_connection()
-    try:
-        if subreddit:
-            row = conn.execute("SELECT COUNT(*) FROM posts WHERE subreddit = ?", (subreddit,)).fetchone()
-        else:
-            row = conn.execute("SELECT COUNT(*) FROM posts").fetchone()
-        return row[0] if row else 0
-    finally:
-        conn.close()
-
-
 def get_all_subreddits():
     conn = get_connection()
     try:
@@ -298,15 +275,6 @@ def remove_bookmark(post_id):
         conn.execute("DELETE FROM bookmarks WHERE post_id = ?", (post_id,))
         conn.commit()
         return True
-    finally:
-        conn.close()
-
-
-def is_bookmarked(post_id):
-    conn = get_connection()
-    try:
-        row = conn.execute("SELECT 1 FROM bookmarks WHERE post_id = ?", (post_id,)).fetchone()
-        return row is not None
     finally:
         conn.close()
 
@@ -374,29 +342,5 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
             params + [limit, offset],
         ).fetchall()
         return [dict(row) for row in rows], total
-    finally:
-        conn.close()
-
-
-def get_bookmarks_count(subreddit=None, start_date=None, end_date=None, q=None):
-    conn = get_connection()
-    try:
-        query = "SELECT COUNT(*) FROM bookmarks b INNER JOIN posts p ON p.id = b.post_id WHERE 1=1"
-        params = []
-        if subreddit:
-            query += " AND p.subreddit = ?"
-            params.append(subreddit)
-        if start_date:
-            query += " AND p.created_utc >= ?"
-            params.append(start_date)
-        if end_date:
-            query += " AND p.created_utc < ?"
-            params.append(end_date)
-        clause, param = _title_search_clause("p.", q)
-        if clause:
-            query += clause
-            params.append(param)
-        total = conn.execute(query, params).fetchone()[0]
-        return total
     finally:
         conn.close()
