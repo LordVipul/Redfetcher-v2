@@ -535,7 +535,7 @@ def scrape_all():
 
 if __name__ == "__main__":
     database.init_db()
-    log.info("Database initialized.")
+    log.info("Database initialized at %s", config.DB_PATH)
 
     try:
         if len(sys.argv) > 1:

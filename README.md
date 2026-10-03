@@ -94,12 +94,12 @@ The web UI provides:
 - **Subreddit list** with post counts on the home page (`/`)
 - **Bookmarks page** (`/bookmarks`) — save and filter posts you want to keep
 - **Filter bar** with:
-  - Subreddit dropdown
-  - Date range (start/end)
-  - Sort by score, comments, newest, oldest
-  - Title keyword search
-  - Minimum score and minimum comment count thresholds (independent, digits-only inputs)
-  - Result limit (50, 100, 200, 500)
+    - Subreddit dropdown
+    - Date range (start/end)
+    - Sort by score, comments, newest, oldest
+    - Title keyword search
+    - Minimum score and minimum comment count thresholds (independent, digits-only inputs)
+    - Result limit (50, 100, 200, 500)
 - **Post cards** with title (clickable link to Reddit), subreddit badge, score, comment count, date, and bookmark button
 - Dark theme with red-orange accent (`#E85D3A`), responsive design
 - Client-side live filtering, pagination with jump-to-page, and URL state preservation
@@ -120,17 +120,17 @@ The web UI provides:
 
 Query parameters for `/posts`, `/api/posts`, `/bookmarks`, and `/api/bookmarks`:
 
-| Parameter   | Type   | Default  | Description         |
-| ----------- | ------ | -------- | ------------------- |
-| `subreddit` | string | all      | Filter by subreddit |
-| `start`     | date   | none     | Start date filter   |
-| `end`       | date   | none     | End date filter     |
-| `sort`      | string | `oldest` | Sort order          |
-| `limit`     | int    | 50       | Max results         |
-| `q`         | string | none     | Title search        |
-| `page`      | int    | 1        | Page number         |
-| `min_score` | int    | none     | Minimum score (`>=`) |
-| `min_comments` | int | none     | Minimum comment count (`>=`) |
+| Parameter      | Type   | Default  | Description                  |
+| -------------- | ------ | -------- | ---------------------------- |
+| `subreddit`    | string | all      | Filter by subreddit          |
+| `start`        | date   | none     | Start date filter            |
+| `end`          | date   | none     | End date filter              |
+| `sort`         | string | `oldest` | Sort order                   |
+| `limit`        | int    | 50       | Max results                  |
+| `q`            | string | none     | Title search                 |
+| `page`         | int    | 1        | Page number                  |
+| `min_score`    | int    | none     | Minimum score (`>=`)         |
+| `min_comments` | int    | none     | Minimum comment count (`>=`) |
 
 Sort options: `score_desc`, `score_asc`, `comments_desc`, `comments_asc`, `newest`, `oldest`
 
@@ -185,19 +185,19 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 
 ### Bookmarks Table
 
-| Field        | Description                   |
-| ------------ | ----------------------------- |
-| `id`         | Auto-increment bookmark ID    |
+| Field        | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `id`         | Auto-increment bookmark ID                       |
 | `post_id`    | Reference to `posts.id` (unique, cascade delete) |
-| `created_at` | When the bookmark was created |
+| `created_at` | When the bookmark was created                    |
 
 ### Scrape State Table
 
 | Field        | Description                                      |
 | ------------ | ------------------------------------------------ |
-| `subreddit`  | Subreddit name (primary key)                    |
+| `subreddit`  | Subreddit name (primary key)                     |
 | `next_start` | First timestamp not yet covered by a full window |
-| `updated_at` | When the checkpoint was last advanced           |
+| `updated_at` | When the checkpoint was last advanced            |
 
 The scraper state is stored in the `scrape_state` table. `next_start` is the first timestamp not yet covered by a complete window; it advances only after the corresponding posts have been inserted. `INSERT OR IGNORE` on the `url` field prevents duplicates from boundary overlap and resumed requests.
 
@@ -249,7 +249,7 @@ redfetcher-v2/
 - **Database locked**: Close any other connections to `reddit_archive.db`.
 - **Slow scraping**: Full backfills make more API requests for dense subreddits; the scraper stays sequential and one request per second. Resumed runs recheck only the checkpoint plus the configured overlap.
 - **Ctrl+C stops the entire scrape**: No need to interrupt subreddit-by-subreddit.
-- **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button (🪖) on any post card to toggle bookmarks.
+- **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button on any post card to toggle bookmarks.
 
 ## Development Notes
 

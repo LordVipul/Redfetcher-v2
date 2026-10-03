@@ -1,3 +1,5 @@
+from pathlib import Path
+
 SUBREDDITS = [
     "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "fossdroid", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "ObsidianMD", "opencode", "opencodeCLI", "OpenModels", "opensource", "PiCodingAgent", "Rainmeter", "selfhosted", "termux", "unixporn", "vibecoding", "web_design"
 ]
@@ -7,7 +9,7 @@ CLIENT_TIMEOUT = 15          # Reduced from 60
 MAX_RETRIES = 2               # Reduced from 4
 BACKOFF_FACTOR = 2.0
 
-DB_PATH = "reddit_archive.db"
+DB_PATH = str(Path(__file__).resolve().parent / "reddit_archive.db")
 
 START_YEAR = 2005
 POSTS_PER_REQUEST = 100
