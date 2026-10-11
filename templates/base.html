@@ -9,73 +9,67 @@
     <link rel="stylesheet" href="/static/css/style.css" />
     {% block head %}{% endblock %}
   </head>
-  <body>
+  <body data-view="{% block body_view %}feed{% endblock %}">
     <a href="#main-content" class="skip-link">Skip to content</a>
 
     <div class="app">
       <header class="header">
         <div class="header-inner">
-          <a href="/" class="logo"
-            ><span class="logo-accent">Red</span>Fetcher</a
-          >
-          <nav class="nav" role="navigation" aria-label="Main navigation">
-            <a href="/" {% if request.path == "/" %}class="active"{% endif %}
-              >Subreddits</a
-            >
-            <a
-              href="/posts"
-{%
-                if request.path == "/posts"
-              %}
-                class="active"
-              {% endif %}
-              >Posts</a
-            >
-            <a
-              href="/bookmarks"
-{%
-                if request.path == "/bookmarks"
-              %}
-                class="active"
-              {% endif %}
-              >Bookmarks</a
-            >
-          </nav>
+          <a href="/" class="logo"><span class="logo-accent">Red</span>Fetcher</a>
           <div class="spacer"></div>
-          <div class="header-search">
-            <div class="search-wrap">
-              <span class="search-icon" aria-hidden="true"
-                ><i class="fa-solid fa-magnifying-glass"></i
-              ></span>
-              <form
-                method="get"
-                action="/posts"
-                role="search"
-                aria-label="Search posts by title"
-              >
-                <input
-                  type="text"
-                  name="q"
-                  id="header-search-input"
-                  placeholder="Search posts…"
-                  aria-label="Search posts by title"
-                />
-              </form>
+          <div class="header-actions">
+            <button
+              type="button"
+              id="settingsBtn"
+              class="icon-btn"
+              aria-label="Settings"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              title="Settings"
+            >
+              <i class="fa-solid fa-gear" aria-hidden="true"></i>
+            </button>
+            <div class="settings-menu" id="settingsMenu" hidden role="menu" aria-labelledby="settingsBtn">
+              <a class="menu-item" href="/dashboard" role="menuitem">Dashboard</a>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" id="toggleSidebar" role="menuitem" aria-pressed="false">Hide sidebar</button>
+              <label class="menu-row">
+                <span>Text size</span>
+                <select id="textSize" class="menu-select" aria-label="Text size">
+                  <option value="s">Small</option>
+                  <option value="m" selected>Normal</option>
+                  <option value="l">Large</option>
+                </select>
+              </label>
+              <label class="menu-row">
+                <span>Reduce motion</span>
+                <input type="checkbox" id="reduceMotion" />
+              </label>
             </div>
           </div>
-          <a href="/posts" class="header-cta">Browse all</a>
         </div>
       </header>
 
-      <main class="content" id="main-content" role="main">
-        {% block content %}{% endblock %}
-      </main>
-
-      <footer class="footer">
-        <span>RedFetcher v2</span>
-        <span class="sep">&middot;</span>
-        <span>Locally run. SQLite.</span>
-      </footer>
+      <div class="layout-wrapper">
+        <aside class="sidebar" id="sidebar" aria-label="Groups">
+          <nav class="sidebar-groups">
+            {% block sidebar %}{% endblock %}
+          </nav>
+          <div class="sidebar-footer">
+            {% block sidebar_footer %}{% endblock %}
+          </div>
+        </aside>
+        <div class="content-col">
+          <main class="content" id="main-content" role="main">
+            {% block content %}{% endblock %}
+          </main>
+          <footer class="footer">
+            <span>RedFetcher v2</span>
+            <span class="sep">&middot;</span>
+            <span>Locally run. SQLite.</span>
+          </footer>
+        </div>
+      </div>
     </div>
 
     <div class="spinner-container" id="spinner-container">

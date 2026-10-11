@@ -5,8 +5,9 @@ A local web application that archives Reddit posts from any subreddit since its 
 ## Architecture
 
 - **`scraper.py`** — Standalone Python script. Fetches posts from Arctic Shift and stores them in SQLite. Run independently: `python scraper.py` or `python scraper.py <subreddit>`.
-- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a filtered, sortable post browser at `http://localhost:8000`. Includes a bookmarks feature.
-- **`database.py`** — SQLite init, batch insert (`executemany`), query helpers, and full bookmarks CRUD.
+- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page, group-driven post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks.
+- **`config.py`** — `GROUPS` (sidebar order: key → short label + subreddits) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings.
+- **`database.py`** — SQLite init, batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, and full bookmarks CRUD.
 - **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
 - **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks.
 
@@ -46,7 +47,7 @@ The first run performs a full backfill from the subreddit's earliest available d
 python server.py
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in your browser.
+Open [http://localhost:8000](http://localhost:8000) in your browser. The sidebar lists **All** plus every configured group; the main section shows that group's posts with the full filter bar (subreddit scoped to the group, sort, limit, min score/comments, dates, title search). **Bookmarks** sits at the bottom of the sidebar and swaps the main section to saved posts. The gear icon opens settings (dashboard link, hide sidebar, text size, reduce motion). `/dashboard` shows archive statistics.
 
 ### 4. Browse the database (optional)
 
@@ -91,41 +92,43 @@ python server.py                   # Starts at http://127.0.0.1:8000
 
 The web UI provides:
 
-- **Subreddit list** with post counts on the home page (`/`)
-- **Bookmarks page** (`/bookmarks`) — save and filter posts you want to keep
-- **Filter bar** with:
-    - Subreddit dropdown
-    - Date range (start/end)
-    - Sort by score, comments, newest, oldest
+- **Sidebar** with **All** plus every group from `config.GROUPS` (with live post counts); clicking a group loads only its subreddits' posts. **Bookmarks** at the bottom of the sidebar swaps the main section to saved posts
+- **Filter bar** at the top of the main section with:
+    - Subreddit dropdown (scoped to the active group; shows "All in <group>")
+    - Sort by score, comments, newest, oldest (hidden in the bookmarks view — bookmarks are always oldest-added first)
     - Title keyword search
     - Minimum score and minimum comment count thresholds (independent, digits-only inputs)
+    - Date range (start/end)
     - Result limit (50, 100, 200, 500)
-- **Post cards** with title (clickable link to Reddit), subreddit badge, score, comment count, date, and bookmark button
-- Dark theme with red-orange accent (`#E85D3A`), responsive design
-- Client-side live filtering, pagination with jump-to-page, and URL state preservation
+- **Post cards** with title (clickable link to Reddit), subreddit badge (click to filter), score, comment count, date, and bookmark button
+- **Bookmarks** with undo toast notifications; the sidebar count updates live
+- **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list
+- **Settings menu** (gear icon) — dashboard link, hide/show sidebar, text size, reduce motion. All preferences persist in `localStorage`
+- Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?group=ai&sort=score_desc`)
 - Keyboard shortcuts: `Ctrl+K` or `/` to focus search
 
 ### API Endpoints
 
 | Endpoint                      | Description                             |
 | ----------------------------- | --------------------------------------- |
-| `GET /`                       | Home page with subreddit list and stats |
-| `GET /posts`                  | Filtered post listing (HTML)            |
-| `GET /api/posts`              | Filtered post listing (JSON)            |
+| `GET /`                       | Main app: group feed or bookmarks view (HTML) |
+| `GET /api/posts`              | Filtered post listing (JSON, supports `group`) |
 | `GET /stats`                  | Post counts per subreddit (JSON)        |
-| `GET /bookmarks`              | Bookmarked posts listing (HTML)         |
 | `GET /api/bookmarks`          | Bookmarked posts listing (JSON)         |
+| `GET /dashboard`              | Dashboard page (HTML)                   |
 | `POST /bookmarks/{post_id}`   | Add a bookmark                          |
 | `DELETE /bookmarks/{post_id}` | Remove a bookmark                       |
 
-Query parameters for `/posts`, `/api/posts`, `/bookmarks`, and `/api/bookmarks`:
+Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:
 
 | Parameter      | Type   | Default  | Description                  |
 | -------------- | ------ | -------- | ---------------------------- |
-| `subreddit`    | string | all      | Filter by subreddit          |
+| `group`        | string | `all`    | Group key from `config.GROUPS` (feed views only) |
+| `view`         | string | `feed`   | `feed` or `bookmarks` (`/` only) |
+| `subreddit`    | string | all      | Filter by subreddit (within the group) |
 | `start`        | date   | none     | Start date filter            |
 | `end`          | date   | none     | End date filter              |
-| `sort`         | string | `oldest` | Sort order                   |
+| `sort`         | string | `oldest` | Sort order (feed views only) |
 | `limit`        | int    | 50       | Max results                  |
 | `q`            | string | none     | Title search                 |
 | `page`         | int    | 1        | Page number                  |
@@ -143,51 +146,24 @@ The filter bar labels them **Min score** and **Min comm**. Both inputs accept di
 non-numeric characters are rejected as you type and stripped from pasted text, keeping the
 leading run of digits, so `1e3` becomes `1` and `12.5` becomes `12`.
 
+`/posts` and `/bookmarks` still work as 302 redirects into `/` (preserving query parameters), so old links keep working.
+
 ## Configuration
 
 Edit `config.py` to customize:
 
 ```python
-SUBREDDITS = [
-    # AI, ML & AI-assisted coding
-    "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
-    # Frontend & web development
-    "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
-    # Design, UX & typography
-    "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
-    # Programming — general & practice
-    "algorithms", "AskProgramming", "codegolf", "coding", "DailyProgrammer", "learnprogramming", "leetcode", "programming",
-    # Computer science
-    "compsci", "computerscience", "osdev",
-    # Developer tooling
-    "git", "neovim", "vim", "vscode", "zsh",
-    # Databases
-    "Database", "SQL", "sqlite",
-    # Self-hosting, Linux & privacy
-    "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
-    # Linux ricing
-    "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn",
-    # Windows customisation
-    "AutoHotkey", "Rainmeter",
-    # Cross-platform theming
-    "FirefoxCSS", "wallpaperengine", "wallpapers",
-    # Android customisation
-    "Android", "androidapps", "androidthemes", "homescreen", "kustom",
-    # Android FOSS & tools
-    "fossdroid", "termux",
-    # Battlestations & setups
-    "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",
-    # Workspace organisation & decluttering
-    "Declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
-    # Science & fiction
-    "astrophysics", "printSF", "scifi", "space",
-    # Maker & right-to-repair
-    "arduino", "electronics", "raspberry_pi", "RightToRepair",
-    # Productivity & personal
-    "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
-]
+GROUPS = {
+    "ai": ("AI", [
+        "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
+    ]),
+    "web": ("Web dev", ["css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev"]),
+    "design": ("Design", ["accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design"]),
+    ...                             # 18 groups total, in sidebar order
+}
+SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
 REQUEST_DELAY = 1.0           # Minimum delay after each API request
-CLIENT_TIMEOUT = 15           # API request timeout
+CLIENT_TIMEOUT = 30           # API request timeout
 MAX_RETRIES = 2               # Retry attempts on failure
 BACKOFF_FACTOR = 2.0          # Exponential backoff factor
 DB_PATH = "reddit_archive.db" # SQLite database file
@@ -198,7 +174,11 @@ QUERY_TIMEOUT_RETRY_DELAY = 20 # Wait before retrying a query-timeout 422
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
 
-The scraper accepts **any** subreddit as a command-line argument, not just the ones in `SUBREDDITS`.
+Groups are ordered (dict insertion order = sidebar order) and subreddits within a group are
+alphabetical. `SUBREDDITS` is derived from `GROUPS`, so the scraper needs no changes when groups
+change.
+
+The scraper accepts **any** subreddit as a command-line argument, not just the ones in the groups.
 
 ## Data Model
 
@@ -253,20 +233,19 @@ The scraper state is stored in the `scrape_state` table. `next_start` is the fir
 
 ```text
 redfetcher-v2/
-├── config.py          # Settings: subreddit list, API config, request delay
-├── database.py        # SQLite init, batch insert, query helpers, bookmarks, scrape state
+├── config.py          # Groups (sidebar), derived subreddit list, API config, request delay
+├── database.py        # SQLite init, batch insert, query helpers, group queries, dashboard, bookmarks, scrape state
 ├── scraper.py         # Arctic Shift scraping logic (standalone)
-├── server.py          # FastAPI web app — routes, templates, bookmarks (standalone)
+├── server.py          # FastAPI web app — routes, groups, bookmarks, dashboard (standalone)
 ├── sql.py             # CLI SQL query tool for reddit_archive.db
 ├── fonts/             # Self-hosted Sora, DM Sans, and Font Awesome assets
 ├── templates/
-│   ├── base.html      # Layout shell with header, nav, footer
-│   ├── index.html     # Landing page: community card grid
-│   ├── posts.html     # Post listing with filters/sort/pagination
-│   ├── bookmarks.html # Bookmarked posts with filters/sort/pagination
+│   ├── base.html      # Layout shell: header with settings menu, sidebar rail, footer
+│   ├── feed.html      # Main feed: filter bar + post list + pagination (feed & bookmarks views)
+│   ├── dashboard.html # Stats: cards, monthly timeline, top subreddits, groups, top posts
 │   └── static/
 │       ├── css/style.css     # AMOLED black + red-orange design system
-│       └── js/app.js         # Client-side filtering, pagination, bookmarks
+│       └── js/app.js         # Sidebar groups, live filtering, pagination, bookmarks, prefs
 ├── requirements.txt
 ├── .gitignore
 ├── reddit_archive.db  # SQLite database (created on first scrape)
@@ -302,16 +281,17 @@ The templates check if `post.url` already starts with `http` before prepending `
 
 ### Client-Side Features
 
+- **Group switching**: Sidebar buttons swap the active group without a page reload; the subreddit dropdown rebuilds to that group's subreddits
 - **Live filtering**: All filters (subreddit, sort, date range, search, min score, min comm, limit) work via `fetch()` without full page reloads
-- **URL state**: Filter state is preserved in the URL query string — shareable links
-- **Pagination**: Page numbers, Prev/Next, and jump-to-page input
-- **Bookmarks**: Toggle bookmarks with undo toast notifications; works on both `/posts` and `/bookmarks` pages
+- **URL state**: Group, view, and filter state live in the URL query string — shareable links (e.g. `/?group=ai&sort=score_desc&q=linux`)
+- **Pagination**: Page numbers, Prev/Next, and jump-to-page input, with focus restoration after navigation
+- **Bookmarks**: Toggle bookmarks with undo toast notifications; sidebar count updates live; bookmarks view removes unbookmarked rows in place
+- **Preferences**: Hide sidebar, text size, and reduce motion persist in `localStorage`
 - **Keyboard shortcuts**: `Ctrl+K` or `/` focuses the search input
-- **Responsive**: Works on desktop and mobile
 
 ### Design System
 
-- **Theme**: AMOLED black (`#000000`) background, dark surface (`#0A0A0A`), red-orange accent (`#E85D3A`)
+- **Theme**: AMOLED black (`#000000`) background, dark surface (`#0A0A0A`), red-orange accent (`#E85D3A`); active sidebar group is accent on white text
 - **Fonts**: Self-hosted Sora (display/headings) + DM Sans (body)
-- **Layout**: 1200px centered container, sticky header, footer at bottom
-- **Accessibility**: Skip-to-content link, ARIA labels, focus-visible outlines, `prefers-reduced-motion` support
+- **Layout**: Header + sidebar rail (All + groups + Bookmarks) beside a 1200px content column; sticky sidebar and header; footer at bottom
+- **Accessibility**: Skip-to-content link, ARIA labels and pressed states, focus-visible outlines, screen-reader result announcer, `prefers-reduced-motion` support

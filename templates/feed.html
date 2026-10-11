@@ -1,33 +1,40 @@
 {% extends "base.html" %}
-{% block title %}Bookmarks{% endblock %}
-{% block head %}
-<style>.header-search { display: none; }</style>
-<script>
-window.__filters = {{ filters|tojson }};
-window.__total = {{ total }};
-window.__page = {{ page }};
-window.__total_pages = {{ total_pages }};
-window.__bookmarked = {{ bookmarked_ids|tojson }};
-</script>
-{% endblock %}
-{% block content %}
-<div class="bookmarks-bar">
-    <h1>Bookmarks</h1>
-    <span class="count">{{ total }} saved</span>
-</div>
+{% block title %}{% if is_bookmarks %}Bookmarks{% else %}{{ group_label }}{% endif %} · RedFetcher{% endblock %}
+{% block body_view %}{{ view }}{% endblock %}
 
+{% block sidebar %}
+  {% for item in sidebar %}
+  <a
+    href="/?group={{ item.key }}"
+    class="group-btn{% if item.active %} active{% endif %}"
+    data-group="{{ item.key }}"
+    {% if item.active %}aria-current="page"{% endif %}
+    ><span class="group-label">{{ item.label }}</span
+    ><span class="group-count">{{ item.count }}</span></a
+  >
+  {% endfor %}
+{% endblock %}
+
+{% block sidebar_footer %}
+  <a href="/?view=bookmarks" class="group-btn bookmarks-btn{% if is_bookmarks %} active{% endif %}">
+    <span class="group-label"><i class="fa-solid fa-bookmark" aria-hidden="true"></i> Bookmarks</span>
+    <span class="group-count" id="bookmark-count">{{ bookmark_count }}</span>
+  </a>
+{% endblock %}
+
+{% block content %}
 <div class="filter-bar" id="filter-bar">
-    <form id="filter-form" action="/bookmarks" method="get" role="search" aria-label="Filter bookmarks" novalidate>
+    <form id="filter-form" action="/" method="get" role="search" aria-label="Filter posts" novalidate>
         <div class="field">
             <label for="filter-subreddit">Subreddit</label>
-            <select name="subreddit" id="filter-subreddit">
-                <option value="">All</option>
+            <select name="subreddit" id="filter-subreddit" data-all-label="{% if is_bookmarks %}All{% elif filters.group == 'all' %}All{% else %}All in {{ group_label }}{% endif %}">
+                <option value="">{% if is_bookmarks %}All{% elif filters.group == "all" %}All{% else %}All in {{ group_label }}{% endif %}</option>
                 {% for s in all_subreddits %}
                 <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="field">
+        <div class="field" id="sort-field"{% if is_bookmarks %} hidden{% endif %}>
             <label for="filter-sort">Sort by</label>
             <select name="sort" id="filter-sort">
                 <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>Oldest</option>
@@ -72,12 +79,12 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
 </div>
 
 {% if total > 0 %}
-<p class="sort-info" id="sort-info" aria-live="polite" aria-atomic="true"><strong>{{ total }}</strong> bookmark{{ 's' if total != 1 else '' }} &middot; page {{ page }} of {{ total_pages }}</p>
+<p class="sort-info" id="sort-info" aria-live="polite" aria-atomic="true"><strong>{{ total }}</strong> {% if is_bookmarks %}bookmark{{ 's' if total != 1 else '' }}{% else %}post{{ 's' if total != 1 else '' }}{% endif %} &middot; page {{ page }} of {{ total_pages }}</p>
 
 <div class="post-feed" id="post-feed" role="list">
     {% for post in posts %}
     <div class="post-item" data-post-id="{{ post.id }}" role="listitem">
-        <a href="/posts?subreddit={{ post.subreddit }}" class="r-badge">r/{{ post.subreddit }}</a>
+        <a href="/?subreddit={{ post.subreddit }}" class="r-badge js-subreddit" data-subreddit="{{ post.subreddit }}">r/{{ post.subreddit }}</a>
         <div class="post-title">
             <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
         </div>
@@ -85,7 +92,7 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
         <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
         <span class="r-action">
-            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}">
+            <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark this post" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="Bookmark this post">
                 <i class="fa-solid fa-bookmark"></i>
             </button>
         </span>
@@ -93,10 +100,10 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
     {% endfor %}
 </div>
 
-{% if total_pages > 1 %}
-<nav class="pagination" id="pagination" aria-label="Bookmarks pagination">
+<nav class="pagination" id="pagination" aria-label="Pagination">
+    {% if total_pages > 1 %}
     {% if page > 1 %}
-    <a href="/bookmarks?{{ query_params(page - 1, filters) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+    <a href="/?{{ query_params(page - 1, filters) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
     {% else %}
     <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
     {% endif %}
@@ -104,7 +111,7 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
         {% if p == page %}
         <span class="current" aria-current="page">{{ p }}</span>
         {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
-        <a href="/bookmarks?{{ query_params(p, filters) }}" class="js-page" data-page="{{ p }}">{{ p }}</a>
+        <a href="/?{{ query_params(p, filters) }}" class="js-page" data-page="{{ p }}">{{ p }}</a>
         {% else %}
         {% if p == 2 or p == total_pages - 1 %}
         <span class="disabled">&hellip;</span>
@@ -112,20 +119,29 @@ window.__bookmarked = {{ bookmarked_ids|tojson }};
         {% endif %}
     {% endfor %}
     {% if page < total_pages %}
-    <a href="/bookmarks?{{ query_params(page + 1, filters) }}" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+    <a href="/?{{ query_params(page + 1, filters) }}" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
     {% else %}
     <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
     {% endif %}
     <div class="jump">
         <input type="number" min="1" max="{{ total_pages }}" placeholder="{{ total_pages }}" id="jump-page" aria-label="Jump to page" />
     </div>
-</div>
-{% endif %}
+    {% endif %}
+</nav>
 {% else %}
 <div class="empty-state">
-    <div class="icon"><i class="fa-regular fa-bookmark"></i></div>
-    <h2>No bookmarks yet</h2>
-    <p>Browse the <a href="/posts">posts feed</a> and save what interests you.</p>
+    <div class="icon"><i class="fa-solid fa-inbox"></i></div>
+    <h2>{% if is_bookmarks %}No bookmarks yet{% else %}No posts found{% endif %}</h2>
+    <p>{% if is_bookmarks %}Bookmark posts from any group to see them here.{% else %}Try different filters or run <code>python scraper.py</code>.{% endif %}</p>
 </div>
 {% endif %}
+
+<script>
+window.__view = "{{ view }}";
+window.__filters = {{ filters|tojson }};
+window.__total = {{ total }};
+window.__page = {{ page }};
+window.__total_pages = {{ total_pages }};
+window.__bookmarked = {{ bookmarked_ids|tojson }};
+</script>
 {% endblock %}

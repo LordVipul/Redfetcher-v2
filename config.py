@@ -1,60 +1,66 @@
 from pathlib import Path
 
-SUBREDDITS = [
-    # ── AI, ML & AI-assisted coding ──
-    "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
+# Groups drive both the scraper (via SUBREDDITS below) and the web UI sidebar.
+# Each entry: key -> (short label, subreddits). Order is the sidebar order;
+# subreddits inside a group are alphabetical.
+GROUPS = {
+    "ai": ("AI", [
+        "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
+    ]),
+    "web": ("Web dev", [
+        "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
+    ]),
+    "design": ("Design", [
+        "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
+    ]),
+    "programming": ("Programming", [
+        "algorithms", "AskProgramming", "codegolf", "coding", "DailyProgrammer", "learnprogramming", "leetcode", "programming",
+    ]),
+    "cs": ("CS", [
+        "compsci", "computerscience", "osdev",
+    ]),
+    "tools": ("Tools", [
+        "git", "neovim", "vim", "vscode", "zsh",
+    ]),
+    "databases": ("Databases", [
+        "Database", "SQL", "sqlite",
+    ]),
+    "selfhosted": ("Self-host", [
+        "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
+    ]),
+    "ricing": ("Ricing", [
+        "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn",
+    ]),
+    "windows": ("Windows", [
+        "AutoHotkey", "Rainmeter",
+    ]),
+    "theming": ("Theming", [
+        "FirefoxCSS", "wallpaperengine", "wallpapers",
+    ]),
+    "android": ("Android", [
+        "Android", "androidapps", "androidthemes", "homescreen", "kustom",
+    ]),
+    "android-foss": ("Android FOSS", [
+        "fossdroid", "termux",
+    ]),
+    "setups": ("Setups", [
+        "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",
+    ]),
+    "organisation": ("Organisation", [
+        "Declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
+    ]),
+    "scifi": ("Sci-fi", [
+        "astrophysics", "printSF", "scifi", "space",
+    ]),
+    "maker": ("Maker", [
+        "arduino", "electronics", "raspberry_pi", "RightToRepair",
+    ]),
+    "personal": ("Personal", [
+        "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
+    ]),
+}
 
-    # ── Frontend & web development ──
-    "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
-
-    # ── Design, UX & typography ──
-    "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
-
-    # ── Programming — general & practice ──
-    "algorithms", "AskProgramming", "codegolf", "coding", "DailyProgrammer", "learnprogramming", "leetcode", "programming",
-
-    # ── Computer science ──
-    "compsci", "computerscience", "osdev",
-
-    # ── Developer tooling ──
-    "git", "neovim", "vim", "vscode", "zsh",
-
-    # ── Databases ──
-    "Database", "SQL", "sqlite",
-
-    # ── Self-hosting, Linux & privacy ──
-    "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
-
-    # ── Linux ricing ──
-    "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn",
-
-    # ── Windows customisation ──
-    "AutoHotkey", "Rainmeter",
-
-    # ── Cross-platform theming ──
-    "FirefoxCSS", "wallpaperengine", "wallpapers",
-
-    # ── Android customisation ──
-    "Android", "androidapps", "androidthemes", "homescreen", "kustom",
-
-    # ── Android FOSS & tools ──
-    "fossdroid", "termux",
-
-    # ── Battlestations & setups ──
-    "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",
-
-    # ── Workspace organisation & decluttering ──
-    "Declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
-
-    # ── Science & fiction ──
-    "astrophysics", "printSF", "scifi", "space",
-
-    # ── Maker & right-to-repair ──
-    "arduino", "electronics", "raspberry_pi", "RightToRepair",
-
-    # ── Productivity & personal ──
-    "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
-]
+SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]
 
 REQUEST_DELAY = 1.0
 CLIENT_TIMEOUT = 30          # Long enough for Cloudflare 52x outage pages to surface instead of masking as client timeouts

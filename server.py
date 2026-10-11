@@ -55,6 +55,7 @@ def to_end_timestamp(date_str):
 SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
 POST_SORTS = {"score_desc", "score_asc", "comments_desc", "comments_asc", "newest", "oldest"}
 BOOKMARK_SORTS = {"oldest", "newest", "score_desc", "score_asc", "comments_desc", "comments_asc"}
+VIEWS = {"feed", "bookmarks"}
 Q_MIN_LEN, Q_MAX_LEN = 2, 100
 MAX_MIN_FILTER = 1_000_000_000
 
@@ -114,8 +115,13 @@ def query_params(page, filters=None):
     params = {}
     if filters:
         for k, v in filters.items():
-            if v is not None and v != "":
-                params[k] = str(v)
+            if v is None or v == "":
+                continue
+            if k == "group" and v == "all":
+                continue
+            if k == "view" and v != "bookmarks":
+                continue
+            params[k] = str(v)
     params["page"] = str(page)
     return urlencode(params)
 
@@ -128,6 +134,39 @@ def redirect_to_page(path, page, filters):
 
 
 templates.env.globals["abs"] = abs
+
+
+# ── Groups ───────────────────────────────────────────────────
+
+def resolve_group(key):
+    """Return (label, subreddits or None) for a group key; None if unknown.
+
+    The special key "all" means no subreddit restriction.
+    """
+    if key in (None, "", "all"):
+        return "All", None
+    if key not in config.GROUPS:
+        return None
+    label, subs = config.GROUPS[key]
+    return label, list(subs)
+
+
+def build_sidebar(active_key, view):
+    """Sidebar model: All + every group with post counts, plus the Bookmarks row."""
+    stats = database.get_stats()
+    counts = {s["subreddit"]: s["count"] for s in stats}
+    total = sum(counts.values())
+    items = [{"key": "all", "label": "All", "count": total, "active": view == "feed" and active_key == "all"}]
+    for key, (label, subs) in config.GROUPS.items():
+        items.append({
+            "key": key,
+            "label": label,
+            "count": sum(counts.get(s, 0) for s in subs),
+            "active": view == "feed" and active_key == key,
+        })
+    return items
+
+
 # ── Shared context ───────────────────────────────────────────
 
 async def build_template_context(request: Request, extra=None, post_ids=(), bookmarked_ids=None):
@@ -149,17 +188,10 @@ async def build_template_context(request: Request, extra=None, post_ids=(), book
 # ── Routes ───────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    stats = await asyncio.to_thread(database.get_stats)
-    return templates.TemplateResponse(
-        request, "index.html",
-        await build_template_context(request, {"stats": stats})
-    )
-
-
-@app.get("/posts", response_class=HTMLResponse)
-async def posts(
+async def index(
     request: Request,
+    group: str = Query("all"),
+    view: str = Query("feed"),
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
@@ -170,35 +202,74 @@ async def posts(
     min_score: str = Query(None),
     min_comments: str = Query(None),
 ):
-    if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
+    if view not in VIEWS:
+        return bad_request(f"invalid view: {view!r} (allowed: feed, bookmarks)")
+    resolved = resolve_group(group)
+    if resolved is None:
+        return bad_request(f"invalid group: {group!r}")
+
+    is_bookmarks = view == "bookmarks"
+    allowed_sorts = BOOKMARK_SORTS if is_bookmarks else POST_SORTS
+    if err := validate_filters(subreddit, start, end, sort, q, allowed_sorts, min_score, min_comments):
         return bad_request(err)
-    results, total = await asyncio.to_thread(
-        database.get_posts,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
-        sort=sort, limit=limit, q=q, page=page,
-        min_score=parse_min_filter(min_score), min_comments=parse_min_filter(min_comments),
-    )
-    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+
+    # Bookmarks are always ordered oldest-first by when they were saved.
+    effective_sort = "oldest" if is_bookmarks else sort
+    min_score, min_comments = parse_min_filter(min_score), parse_min_filter(min_comments)
+    filters = {
+        "group": group, "view": view if is_bookmarks else "feed",
+        "subreddit": subreddit, "start": start, "end": end,
+        "sort": effective_sort, "limit": limit, "q": q,
+        "min_score": min_score, "min_comments": min_comments,
+    }
+
+    group_label, group_subs = resolved
+    if is_bookmarks:
+        results, total = await asyncio.to_thread(
+            database.get_bookmarks,
+            limit=limit, offset=(page - 1) * limit, sort=effective_sort,
+            subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+            min_score=min_score, min_comments=min_comments,
+        )
+    else:
+        results, total = await asyncio.to_thread(
+            database.get_posts,
+            subreddit=subreddit, subreddits=group_subs,
+            start_date=to_timestamp(start), end_date=to_end_timestamp(end),
+            sort=effective_sort, limit=limit, q=q, page=page,
+            min_score=min_score, min_comments=min_comments,
+        )
+
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
-        return redirect_to_page(
-            "/posts",
-            total_pages,
-            {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q,
-             "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
+        return redirect_to_page("/", total_pages, filters)
+
+    sidebar = await asyncio.to_thread(build_sidebar, group, view)
+    bookmark_count = await asyncio.to_thread(database.get_bookmark_count)
+    if is_bookmarks:
+        all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+    else:
+        all_subreddits = group_subs if group_subs is not None else await asyncio.to_thread(
+            database.get_all_subreddits
         )
+
     log.info(
-        f"GET /posts — subreddit={subreddit}, sort={sort}, limit={limit}, "
+        f"GET / — view={view}, group={group}, sort={effective_sort}, limit={limit}, "
         f"page={page}, q={'yes' if q else 'no'}, results={len(results)}, total={total}"
     )
     return templates.TemplateResponse(
         request,
-        "posts.html",
+        "feed.html",
         await build_template_context(request, {
             "posts": results,
-            "filters": {"subreddit": subreddit, "start": start, "end": end, "sort": sort, "limit": limit, "q": q,
-                        "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
+            "filters": filters,
             "all_subreddits": all_subreddits,
+            "sidebar": sidebar,
+            "bookmark_count": bookmark_count,
+            "view": view,
+            "group": group,
+            "group_label": group_label,
+            "is_bookmarks": is_bookmarks,
             "total": total,
             "page": page,
             "total_pages": total_pages,
@@ -208,6 +279,7 @@ async def posts(
 
 @app.get("/api/posts")
 async def api_posts(
+    group: str = Query("all"),
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
@@ -220,11 +292,16 @@ async def api_posts(
 ):
     if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
         return bad_request(err)
+    resolved = resolve_group(group)
+    if resolved is None:
+        return bad_request(f"invalid group: {group!r}")
+    _, group_subs = resolved
     min_score = parse_min_filter(min_score)
     min_comments = parse_min_filter(min_comments)
     results, total = await asyncio.to_thread(
         database.get_posts,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
+        subreddit=subreddit, subreddits=group_subs,
+        start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
         min_score=min_score, min_comments=min_comments,
     )
@@ -234,20 +311,26 @@ async def api_posts(
         if total > 0:
             results, total = await asyncio.to_thread(
                 database.get_posts,
-                subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end),
+                subreddit=subreddit, subreddits=group_subs,
+                start_date=to_timestamp(start), end_date=to_end_timestamp(end),
                 sort=sort, limit=limit, q=q, page=page,
                 min_score=min_score, min_comments=min_comments,
             )
-    log.info(f"GET /api/posts — {len(results)} posts returned")
+    log.info(f"GET /api/posts — group={group}, {len(results)} posts returned")
     bookmarked_ids = await asyncio.to_thread(
         database.get_bookmark_ids_for, [p["id"] for p in results]
     )
+    if group_subs is not None:
+        group_subreddits = group_subs
+    else:
+        group_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     return {
         "posts": results,
         "total": total,
         "bookmarked_ids": bookmarked_ids,
         "page": page,
         "total_pages": total_pages,
+        "subreddits": group_subreddits,
     }
 
 
@@ -256,52 +339,6 @@ async def stats():
     data = await asyncio.to_thread(database.get_stats)
     log.info(f"GET /stats — {len(data)} subreddits")
     return data
-
-
-@app.get("/bookmarks", response_class=HTMLResponse)
-async def bookmarks(
-    request: Request,
-    sort: str = Query("oldest"),
-    limit: int = Query(50, ge=1, le=500),
-    page: int = Query(1, ge=1),
-    subreddit: str = Query(None),
-    start: str = Query(None),
-    end: str = Query(None),
-    q: str = Query(None),
-    min_score: str = Query(None),
-    min_comments: str = Query(None),
-):
-    if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS, min_score, min_comments):
-        return bad_request(err)
-    results, total = await asyncio.to_thread(
-        database.get_bookmarks,
-        limit=limit, offset=(page - 1) * limit, sort=sort,
-        subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
-        min_score=parse_min_filter(min_score), min_comments=parse_min_filter(min_comments),
-    )
-    total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
-    if page > total_pages:
-        return redirect_to_page(
-            "/bookmarks",
-            total_pages,
-            {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q,
-             "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
-        )
-    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
-    log.info(f"GET /bookmarks — subreddit={subreddit}, sort={sort}, q={'yes' if q else 'no'}, page={page}, total={total}")
-    return templates.TemplateResponse(
-        request,
-        "bookmarks.html",
-        await build_template_context(request, {
-            "posts": results,
-            "filters": {"subreddit": subreddit, "sort": sort, "limit": limit, "start": start, "end": end, "q": q,
-                        "min_score": parse_min_filter(min_score), "min_comments": parse_min_filter(min_comments)},
-            "total": total,
-            "page": page,
-            "total_pages": total_pages,
-            "all_subreddits": all_subreddits,
-        }, bookmarked_ids=[p["id"] for p in results]),
-    )
 
 
 @app.get("/api/bookmarks")
@@ -361,6 +398,52 @@ async def remove_bookmark(post_id: str):
     await asyncio.to_thread(database.remove_bookmark, post_id)
     log.info(f"DELETE /bookmarks/{post_id} — bookmark removed")
     return JSONResponse({"status": "unbookmarked", "post_id": post_id})
+
+
+# ── Dashboard ─────────────────────────────────────────────────
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    data = await asyncio.to_thread(database.get_dashboard_data)
+    counts = {s["subreddit"]: s["count"] for s in data["per_subreddit"]}
+    group_totals = [
+        {
+            "key": key,
+            "label": label,
+            "count": sum(counts.get(s, 0) for s in subs),
+            "sub_count": len(subs),
+        }
+        for key, (label, subs) in config.GROUPS.items()
+    ]
+    log.info(
+        f"GET /dashboard — {data['totals']['posts']} posts, "
+        f"{data['totals']['subreddits']} subreddits"
+    )
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        await build_template_context(request, {
+            "totals": data["totals"],
+            "per_subreddit": data["per_subreddit"],
+            "monthly": data["monthly"],
+            "top_posts": data["top_posts"],
+            "group_totals": group_totals,
+        }),
+    )
+
+
+# ── Legacy route redirects ───────────────────────────────────
+
+@app.get("/posts")
+async def posts_redirect(request: Request):
+    return RedirectResponse(url=f"/?{request.url.query}", status_code=302)
+
+
+@app.get("/bookmarks")
+async def bookmarks_redirect(request: Request):
+    qs = request.url.query
+    url = "/?view=bookmarks" + (f"&{qs}" if qs else "")
+    return RedirectResponse(url=url, status_code=302)
 
 
 # ── Entry point ──────────────────────────────────────────────

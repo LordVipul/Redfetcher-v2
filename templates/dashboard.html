@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · RedFetcher{% endblock %}
+{% block body_view %}dashboard{% endblock %}
+
+{% block sidebar %}
+  <a href="/" class="group-btn"><span class="group-label"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to feed</span></a>
+{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+
+<div class="stat-cards">
+    <div class="stat-card">
+        <span class="stat-label">Posts archived</span>
+        <span class="stat-value">{{ "{:,}".format(totals.posts) }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-label">Subreddits</span>
+        <span class="stat-value">{{ "{:,}".format(totals.subreddits) }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-label">Bookmarks</span>
+        <span class="stat-value">{{ "{:,}".format(totals.bookmarks) }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-label">Total score</span>
+        <span class="stat-value">{{ "{:,}".format(totals.total_score or 0) }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-label">Span</span>
+        <span class="stat-value stat-value-sm">{{ totals.first_post|datetimeformat }} &rarr; {{ totals.last_post|datetimeformat }}</span>
+    </div>
+</div>
+
+<section class="dash-section">
+    <h2 class="dash-heading">Posts per month</h2>
+    {% set max_month = monthly|map(attribute='count')|max %}
+    <div class="month-chart" role="img" aria-label="Posts per month, {{ monthly|length }} months">
+        {% for m in monthly %}
+        <div class="month-bar" style="height: {{ (100 * m.count / max_month)|round(2) }}%" title="{{ m.month }}: {{ '{:,}'.format(m.count) }}"></div>
+        {% endfor %}
+    </div>
+    <div class="chart-axis"><span>{{ monthly[0].month }}</span><span>{{ monthly[-1].month }}</span></div>
+</section>
+
+<section class="dash-section">
+    <h2 class="dash-heading">Top subreddits</h2>
+    {% set max_sub = per_subreddit[0].count %}
+    <div class="sub-bars">
+        {% for s in per_subreddit[:20] %}
+        <a class="sub-bar-row" href="/?subreddit={{ s.subreddit }}">
+            <span class="sub-bar-name">r/{{ s.subreddit }}</span>
+            <span class="sub-bar-track"><span class="sub-bar-fill" style="width: {{ (100 * s.count / max_sub)|round(2) }}%"></span></span>
+            <span class="sub-bar-count">{{ "{:,}".format(s.count) }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="dash-section">
+    <h2 class="dash-heading">Groups</h2>
+    <div class="group-grid">
+        {% for g in group_totals %}
+        <a class="group-card" href="/?group={{ g.key }}">
+            <span class="group-card-label">{{ g.label }}</span>
+            <span class="group-card-count">{{ "{:,}".format(g.count) }}</span>
+            <span class="group-card-subs">{{ g.sub_count }} subreddits</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="dash-section">
+    <h2 class="dash-heading">Top posts</h2>
+    <div class="post-feed" role="list">
+        {% for post in top_posts %}
+        <div class="post-item" role="listitem">
+            <a href="/?subreddit={{ post.subreddit }}" class="r-badge">r/{{ post.subreddit }}</a>
+            <div class="post-title">
+                <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
+            </div>
+            <span class="post-date">{{ post.created_utc|datetimeformat }}</span>
+            <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ "{:,}".format(post.score) }}</span>
+            <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ "{:,}".format(post.num_comments) }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="dash-section">
+    <h2 class="dash-heading">All subreddits</h2>
+    <div class="sub-grid">
+        {% for s in per_subreddit %}
+        <a class="sub-chip" href="/?subreddit={{ s.subreddit }}" title="avg score {{ (s.avg_score or 0)|round|int }}">
+            r/{{ s.subreddit }}<span class="sub-chip-count">{{ "{:,}".format(s.count) }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

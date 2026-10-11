@@ -1,5 +1,7 @@
 import os
 import sqlite3
+import time
+
 import config
 
 
@@ -198,48 +200,94 @@ def _min_filter_clauses(alias, min_score, min_comments):
     return clauses, params
 
 
-def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", limit=100, q=None, page=1, min_score=None, min_comments=None):
+def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", limit=100, q=None, page=1, min_score=None, min_comments=None, subreddits=None):
     conn = get_connection()
     try:
-        where = " WHERE 1=1"
+        # Non-subreddit filters, shared by the count query and every row query.
+        # Bare " AND …" clauses; each query supplies its own WHERE 1=1.
+        filters = ""
         params = []
-
-        if subreddit:
-            where += " AND subreddit = ?"
-            params.append(subreddit)
         if start_date:
-            where += " AND created_utc >= ?"
+            filters += " AND created_utc >= ?"
             params.append(start_date)
         if end_date:
-            where += " AND created_utc < ?"
+            filters += " AND created_utc < ?"
             params.append(end_date)
         clauses, clause_params = _min_filter_clauses("", min_score, min_comments)
         for c in clauses:
-            where += c
+            filters += c
         params.extend(clause_params)
         clause, param = _title_search_clause("", q)
         if clause:
-            where += clause
+            filters += clause
             params.append(param)
 
         sort_map = {
-            "score_desc": "score DESC",
-            "score_asc": "score ASC",
-            "comments_desc": "num_comments DESC",
-            "comments_asc": "num_comments ASC",
-            "newest": "created_utc DESC",
-            "oldest": "created_utc ASC",
+            "score_desc": ("score", "DESC"),
+            "score_asc": ("score", "ASC"),
+            "comments_desc": ("num_comments", "DESC"),
+            "comments_asc": ("num_comments", "ASC"),
+            "newest": ("created_utc", "DESC"),
+            "oldest": ("created_utc", "ASC"),
         }
         if sort not in sort_map:
             raise ValueError(f"invalid sort: {sort!r}")
-        order = sort_map[sort]
+        col, direction = sort_map[sort]
         offset = (page - 1) * limit
 
-        total = conn.execute(f"SELECT COUNT(*) FROM posts{where}", params).fetchone()[0]
-        rows = conn.execute(
-            f"SELECT * FROM posts{where} ORDER BY {order} LIMIT ? OFFSET ?",
-            params + [limit, offset],
-        ).fetchall()
+        if subreddit:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit = ?{filters}",
+                [subreddit] + params,
+            ).fetchone()[0]
+        elif subreddits:
+            placeholders = ",".join("?" * len(subreddits))
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters}",
+                list(subreddits) + params,
+            ).fetchone()[0]
+        else:
+            total = conn.execute(f"SELECT COUNT(*) FROM posts WHERE 1=1{filters}", params).fetchone()[0]
+
+        # Group queries: one indexed per-subreddit branch, merged and sorted in
+        # SQL. A single IN-list makes SQLite temp-b-tree-sort every matching row
+        # (0.8s on the AI group); branches stay on the (subreddit, <sort col>)
+        # index (~5ms). Shallow pages only — past a deep offset the per-branch
+        # cutoffs fetch more rows than the plain scan costs, so deep pages fall
+        # back to the IN-list below. id breaks ties so pages are stable.
+        if subreddits and len(subreddits) > 1 and limit + offset <= 5000:
+            branches, branch_params = [], []
+            for sub in subreddits:
+                branches.append(
+                    f"SELECT * FROM (SELECT * FROM posts WHERE 1=1 AND subreddit = ?{filters} "
+                    f"ORDER BY {col} {direction}, id ASC LIMIT ?)"
+                )
+                branch_params.extend([sub] + params + [limit + offset])
+            sql = (
+                " UNION ALL ".join(branches)
+                + f" ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?"
+            )
+            rows = conn.execute(sql, branch_params + [limit, offset]).fetchall()
+            return [dict(row) for row in rows], total
+
+        if subreddits:
+            placeholders = ",".join("?" * len(subreddits))
+            rows = conn.execute(
+                f"SELECT * FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters} "
+                f"ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                list(subreddits) + params + [limit, offset],
+            ).fetchall()
+        elif subreddit:
+            rows = conn.execute(
+                f"SELECT * FROM posts WHERE 1=1 AND subreddit = ?{filters} "
+                f"ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                [subreddit] + params + [limit, offset],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM posts WHERE 1=1{filters} ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
         return [dict(row) for row in rows], total
     finally:
         conn.close()
@@ -295,6 +343,14 @@ def get_bookmark_ids_for(post_ids):
         conn.close()
 
 
+def get_bookmark_count():
+    conn = get_connection()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+    finally:
+        conn.close()
+
+
 def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=None, end_date=None, q=None, min_score=None, min_comments=None):
     conn = get_connection()
     try:
@@ -344,3 +400,77 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
         return [dict(row) for row in rows], total
     finally:
         conn.close()
+
+
+# ── Dashboard aggregations ─────────────────────────
+
+# The dashboard re-reads whole-table aggregates that change only when the
+# scraper inserts. A short TLR keeps the page fast during long scrapes
+# without ever serving meaningfully stale numbers.
+_DASHBOARD_CACHE_TTL = 60.0
+_dashboard_cache = {"at": 0.0, "data": None}
+
+
+def get_dashboard_data(top_posts_limit=10):
+    """One pass over the aggregates the dashboard page needs.
+
+    Per-subreddit counts/avg score, monthly post series and top posts. The
+    whole-table scans are bounded by the existing indexes where possible;
+    anything unindexed is a single sequential pass kept behind one connection
+    so the dashboard costs a handful of round trips, not one per panel.
+    Results are cached for a minute — the underlying numbers only move when
+    the scraper inserts.
+    """
+    now = time.monotonic()
+    cached = _dashboard_cache["data"]
+    if cached is not None and now - _dashboard_cache["at"] < _DASHBOARD_CACHE_TTL:
+        return cached
+
+    conn = get_connection()
+    try:
+        totals = dict(
+            conn.execute(
+                "SELECT COUNT(*) AS posts, COUNT(DISTINCT subreddit) AS subreddits, "
+                "MIN(created_utc) AS first_post, MAX(created_utc) AS last_post, "
+                "SUM(score) AS total_score FROM posts"
+            ).fetchone()
+        )
+        totals["bookmarks"] = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+
+        per_subreddit = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT subreddit, COUNT(*) AS count, AVG(score) AS avg_score, "
+                "MAX(created_utc) AS last_post FROM posts GROUP BY subreddit ORDER BY count DESC"
+            ).fetchall()
+        ]
+
+        monthly = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT strftime('%Y-%m', created_utc, 'unixepoch') AS month, COUNT(*) AS count "
+                "FROM posts GROUP BY month ORDER BY month"
+            ).fetchall()
+        ]
+
+        top_posts = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, title, url, subreddit, score, num_comments, created_utc "
+                "FROM posts ORDER BY score DESC LIMIT ?",
+                (top_posts_limit,),
+            ).fetchall()
+        ]
+
+        data = {
+            "totals": totals,
+            "per_subreddit": per_subreddit,
+            "monthly": monthly,
+            "top_posts": top_posts,
+        }
+    finally:
+        conn.close()
+
+    _dashboard_cache["at"] = now
+    _dashboard_cache["data"] = data
+    return data
