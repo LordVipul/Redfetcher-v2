@@ -168,7 +168,7 @@ class LoggingArcticShiftClient(ArcticShiftClient):
                 time.sleep(delay)
                 continue
 
-            if status in {500, 502, 503, 504} or "query timed out" in body.lower():
+            if status in {500, 502, 503, 504, 522, 523} or "query timed out" in body.lower():
                 if attempt >= max_attempts:
                     log.error(
                         "API service failure (attempt %d/%d) status=%d reason=%s "

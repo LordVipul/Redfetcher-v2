@@ -149,10 +149,42 @@ Edit `config.py` to customize:
 
 ```python
 SUBREDDITS = [
-    "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "fossdroid",
-    "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "ObsidianMD", "opencode",
-    "opencodeCLI", "OpenModels", "opensource", "PiCodingAgent", "Rainmeter",
-    "selfhosted", "termux", "unixporn", "vibecoding", "web_design"
+    # AI, ML & AI-assisted coding
+    "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
+    # Frontend & web development
+    "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
+    # Design, UX & typography
+    "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
+    # Programming — general & practice
+    "algorithms", "AskProgramming", "codegolf", "coding", "DailyProgrammer", "learnprogramming", "leetcode", "programming",
+    # Computer science
+    "compsci", "computerscience", "osdev",
+    # Developer tooling
+    "git", "neovim", "vim", "vscode", "zsh",
+    # Databases
+    "Database", "SQL", "sqlite",
+    # Self-hosting, Linux & privacy
+    "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
+    # Linux ricing
+    "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn",
+    # Windows customisation
+    "AutoHotkey", "Rainmeter",
+    # Cross-platform theming
+    "FirefoxCSS", "wallpaperengine", "wallpapers",
+    # Android customisation
+    "Android", "androidapps", "androidthemes", "homescreen", "kustom",
+    # Android FOSS & tools
+    "fossdroid", "termux",
+    # Battlestations & setups
+    "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",
+    # Workspace organisation & decluttering
+    "Declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
+    # Science & fiction
+    "astrophysics", "printSF", "scifi", "space",
+    # Maker & right-to-repair
+    "arduino", "electronics", "raspberry_pi", "RightToRepair",
+    # Productivity & personal
+    "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
 ]
 REQUEST_DELAY = 1.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 15           # API request timeout
