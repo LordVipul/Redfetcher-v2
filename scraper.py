@@ -40,10 +40,15 @@ class LoggingArcticShiftClient(ArcticShiftClient):
             return max(1, int(retry_after))
         return max(1, self._rate_limit_wait(response))
 
+    def _query_timeout_delay(self, attempt):
+        backoff = config.QUERY_TIMEOUT_BACKOFF
+        return backoff[min(attempt, len(backoff)) - 1]
+
     def request(self, endpoint, params=None):
         url = f"{self.base_url}{endpoint}"
         clean_params = self._clean(params)
         max_attempts = max(1, self.max_retries)
+        query_timeout_retries = 0
 
         for attempt in range(1, max_attempts + 1):
             log.debug(
@@ -113,18 +118,21 @@ class LoggingArcticShiftClient(ArcticShiftClient):
                 if attempt >= max_attempts:
                     log.error(
                         "API query timeout (attempt %d/%d) status=422 reason=%s body=%s "
-                        "url=%s; no further retries",
+                        "url=%s; not recovered after %d attempts, giving up so the "
+                        "window can be split",
                         attempt,
                         max_attempts,
                         reason,
                         body,
                         url,
+                        max_attempts,
                     )
                     raise QueryTimeoutError(
                         f"API query timeout after {max_attempts} attempts: "
                         f"status=422 reason={reason} body={body} url={url}"
                     )
-                delay = config.QUERY_TIMEOUT_RETRY_DELAY
+                query_timeout_retries += 1
+                delay = self._query_timeout_delay(attempt)
                 log.warning(
                     "API query timeout (attempt %d/%d) status=422 reason=%s body=%s "
                     "url=%s; retrying in %.1fs",
@@ -225,6 +233,12 @@ class LoggingArcticShiftClient(ArcticShiftClient):
                 ) from exc
 
             time.sleep(self.sleep_seconds)
+            if query_timeout_retries:
+                log.info(
+                    "API query timeout recovered after %d retry(ies) without splitting url=%s",
+                    query_timeout_retries,
+                    url,
+                )
             return data
 
         raise ScrapeError(f"Unexpected API request failure: {url}")
@@ -486,7 +500,7 @@ def scrape_subreddit(subreddit):
     client = LoggingArcticShiftClient(
         timeout=config.CLIENT_TIMEOUT,
         sleep_seconds=config.REQUEST_DELAY,
-        max_retries=config.MAX_RETRIES,
+        max_retries=config.MAX_ATTEMPTS,
         backoff_factor=config.BACKOFF_FACTOR,
     )
     end = datetime.now(timezone.utc)

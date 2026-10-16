@@ -79,7 +79,7 @@ The scraper:
 - Persists a durable per-subreddit checkpoint after every complete window
 - Rechecks the last 48 hours on resumed runs to catch recently archived posts
 - Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
-- Waits 20 seconds for query-timeout `422` responses, then splits the window if needed
+- Retries query-timeout `422` responses with escalating waits (20s, 40s); if the query still times out it falls back to splitting the window
 - Logs HTTP status, response summary, and rate-limit reset headers for API failures
 - Skips a subreddit on an unrecoverable error and continues with the rest, instead of aborting the whole run
 - **One Ctrl+C stops the entire scrape** — no need to interrupt subreddit-by-subreddit
@@ -164,13 +164,13 @@ GROUPS = {
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
 REQUEST_DELAY = 1.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 30           # API request timeout
-MAX_RETRIES = 2               # Retry attempts on failure
+MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries)
 BACKOFF_FACTOR = 2.0          # Exponential backoff factor
 DB_PATH = "reddit_archive.db" # SQLite database file
 START_YEAR = 2005             # Earliest year checked during full backfill
 POSTS_PER_REQUEST = 100       # Maximum requested from the API
 MIN_SCRAPE_WINDOW_SECONDS = 1 # Stop splitting a saturated window below this width
-QUERY_TIMEOUT_RETRY_DELAY = 20 # Wait before retrying a query-timeout 422
+QUERY_TIMEOUT_BACKOFF = (20, 40) # Escalating waits (s) for query-timeout 422 retries
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
 
