@@ -284,6 +284,44 @@ def get_scrape_start(subreddit, client):
     return datetime(start_year, 1, 1, tzinfo=timezone.utc)
 
 
+def _request_posts(client, subreddit, start, end, limit, fields, sort, stats):
+    query_start = start - timedelta(seconds=1)
+    query_end = end + timedelta(seconds=1)
+    stats["requests"] += 1
+    log.debug(
+        "[%s] Requesting %s to %s (sort=%s)",
+        subreddit,
+        _format_api_datetime(query_start),
+        _format_api_datetime(query_end),
+        sort,
+    )
+    data = client.search_posts(
+        subreddit=subreddit,
+        after=_format_api_datetime(query_start),
+        before=_format_api_datetime(query_end),
+        limit=limit,
+        sort=sort,
+        fields=fields,
+    )
+    posts = normalize_response(data)
+    stats["posts_returned"] += len(posts)
+    return posts
+
+
+def _merge_unique_posts(*groups):
+    seen = set()
+    merged = []
+    for group in groups:
+        for post in group:
+            post_id = post.get("id")
+            if post_id is not None:
+                if post_id in seen:
+                    continue
+                seen.add(post_id)
+            merged.append(post)
+    return merged
+
+
 def _fetch_window(
     client,
     subreddit,
@@ -295,25 +333,8 @@ def _fetch_window(
     stats,
     on_complete,
 ):
-    query_start = start - timedelta(seconds=1)
-    query_end = end + timedelta(seconds=1)
-    stats["requests"] += 1
-    log.debug(
-        "[%s] Requesting %s to %s",
-        subreddit,
-        _format_api_datetime(query_start),
-        _format_api_datetime(query_end),
-    )
     try:
-        data = client.search_posts(
-            subreddit=subreddit,
-            after=_format_api_datetime(query_start),
-            before=_format_api_datetime(query_end),
-            limit=limit,
-            sort="asc",
-            fields=fields,
-        )
-        posts = normalize_response(data)
+        posts = _request_posts(client, subreddit, start, end, limit, fields, "asc", stats)
     except QueryTimeoutError as exc:
         if end - start <= minimum_window:
             raise QueryTimeoutError(
@@ -356,13 +377,29 @@ def _fetch_window(
             f"{_format_api_datetime(end)}: {exc}"
         ) from exc
 
-    stats["posts_returned"] += len(posts)
     if len(posts) >= limit:
         if end - start <= minimum_window:
-            raise ScrapeError(
-                f"[{subreddit}] Window remains saturated at the minimum width: "
-                f"{_format_api_datetime(start)} to {_format_api_datetime(end)}"
+            desc_posts = _request_posts(
+                client, subreddit, start, end, limit, fields, "desc", stats
             )
+            merged = _merge_unique_posts(posts, desc_posts)
+            log.warning(
+                "[%s] Window saturated at minimum width (%s to %s): captured %d "
+                "unique posts at the tie (asc=%d, desc=%d); any same-timestamp "
+                "overflow beyond that cannot be fetched and is skipped",
+                subreddit,
+                _format_api_datetime(start),
+                _format_api_datetime(end),
+                len(merged),
+                len(posts),
+                len(desc_posts),
+            )
+            if merged:
+                yield merged
+            stats["completed_windows"] += 1
+            if on_complete:
+                on_complete(end)
+            return
         midpoint = start + (end - start) / 2
         log.info(
             "[%s] Saturated window (%d posts); splitting %s to %s",
@@ -418,9 +455,9 @@ def fetch_posts_batch(client, subreddit, start, end, limit=100, fields=None, on_
     if limit < 1 or limit > 100:
         raise ValueError("limit must be between 1 and 100")
 
-    minimum_window = timedelta(hours=config.MIN_SCRAPE_WINDOW_HOURS)
+    minimum_window = timedelta(seconds=config.MIN_SCRAPE_WINDOW_SECONDS)
     if minimum_window <= timedelta(0):
-        raise ValueError("MIN_SCRAPE_WINDOW_HOURS must be positive")
+        raise ValueError("MIN_SCRAPE_WINDOW_SECONDS must be positive")
 
     stats = {"requests": 0, "completed_windows": 0, "posts_returned": 0}
     for window_start, window_end in split_time_range(start, end, step_hours=720):
@@ -515,6 +552,7 @@ def scrape_subreddit(subreddit):
 
 def scrape_all():
     total = 0
+    failed = []
     log.info(
         "Starting scrape for %d subreddits: %s",
         len(config.SUBREDDITS),
@@ -522,12 +560,25 @@ def scrape_all():
     )
     try:
         for subreddit in config.SUBREDDITS:
-            total += scrape_subreddit(subreddit)
+            try:
+                total += scrape_subreddit(subreddit)
+            except Exception as exc:
+                log.error(
+                    "[%s] Skipping subreddit after an unrecoverable error; "
+                    "continuing with the rest: %s",
+                    subreddit,
+                    exc,
+                )
+                failed.append(subreddit)
     except KeyboardInterrupt:
         log.warning("Interrupted. Stopping scrape.")
         return 130
-    except Exception as exc:
-        log.error("Scrape stopped after a fatal error: %s", exc)
+    if failed:
+        log.warning(
+            "Scrape finished with %d subreddit(s) skipped: %s",
+            len(failed),
+            ", ".join(failed),
+        )
         return 1
     log.info("Scrape complete. %d new posts across %d subreddits.", total, len(config.SUBREDDITS))
     return 0

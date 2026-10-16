@@ -74,14 +74,14 @@ The scraper:
 - Connects to the Arctic Shift API (`arctic-shift.photon-reddit.com`)
 - Uses exact UTC timestamps and sequential requests with a one-second delay
 - Starts with 30-day windows and splits any window that returns the 100-post API cap
-- Stops safely with an explicit error if a one-hour window still saturates
+- Splits down to a 1-second floor; if a single second still returns 100 posts (a bot/spam flood), it captures up to 200 via ascending + descending queries and advances past the rest
 - Stores posts in `reddit_archive.db` using batch `INSERT OR IGNORE` (no duplicates)
 - Persists a durable per-subreddit checkpoint after every complete window
 - Rechecks the last 48 hours on resumed runs to catch recently archived posts
 - Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
 - Waits 20 seconds for query-timeout `422` responses, then splits the window if needed
 - Logs HTTP status, response summary, and rate-limit reset headers for API failures
-- Stops the run on an unrecoverable API error instead of silently skipping a window
+- Skips a subreddit on an unrecoverable error and continues with the rest, instead of aborting the whole run
 - **One Ctrl+C stops the entire scrape** — no need to interrupt subreddit-by-subreddit
 
 ### Web App (`server.py`)
@@ -169,7 +169,7 @@ BACKOFF_FACTOR = 2.0          # Exponential backoff factor
 DB_PATH = "reddit_archive.db" # SQLite database file
 START_YEAR = 2005             # Earliest year checked during full backfill
 POSTS_PER_REQUEST = 100       # Maximum requested from the API
-MIN_SCRAPE_WINDOW_HOURS = 1   # Stop splitting a saturated window below this width
+MIN_SCRAPE_WINDOW_SECONDS = 1 # Stop splitting a saturated window below this width
 QUERY_TIMEOUT_RETRY_DELAY = 20 # Wait before retrying a query-timeout 422
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
@@ -271,9 +271,9 @@ redfetcher-v2/
 3. If no checkpoint exists, find the earliest year with posts via yearly scan (`find_start_year`)
 4. Request 30-day UTC windows with `limit=100`
 5. Split every saturated window recursively until each child is below the limit
-6. Stop safely if a one-hour window still returns the limit
+6. If a window is still saturated at the 1-second floor (a same-second flood), fetch the opposite end too, keep the unique union (up to 200), and advance — the unreachable overflow is logged and skipped
 7. Batch insert each complete result, then advance the checkpoint only after insertion
-8. Stop the run on API failure without advancing past the failed window
+8. On API failure, skip the subreddit and continue with the rest, without advancing past the failed window
 
 ### URL Handling
 

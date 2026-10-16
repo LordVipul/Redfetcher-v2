@@ -56,7 +56,7 @@ GROUPS = {
         "arduino", "electronics", "raspberry_pi", "RightToRepair",
     ]),
     "personal": ("Personal", [
-        "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
+        "DigitalEscapeTools", "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
     ]),
 }
 
@@ -71,6 +71,6 @@ DB_PATH = str(Path(__file__).resolve().parent / "reddit_archive.db")
 
 START_YEAR = 2005
 POSTS_PER_REQUEST = 100
-MIN_SCRAPE_WINDOW_HOURS = 1
+MIN_SCRAPE_WINDOW_SECONDS = 1
 QUERY_TIMEOUT_RETRY_DELAY = 20
 RESUME_OVERLAP_HOURS = 48
