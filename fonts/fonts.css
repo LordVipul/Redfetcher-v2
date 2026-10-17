@@ -35,6 +35,14 @@
 }
 
 @font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./firacode-var.woff2") format("woff2");
+}
+
+@font-face {
   font-family: "DM Sans";
   font-style: italic;
   font-weight: 400;

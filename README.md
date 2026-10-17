@@ -238,7 +238,7 @@ redfetcher-v2/
 ├── scraper.py         # Arctic Shift scraping logic (standalone)
 ├── server.py          # FastAPI web app — routes, groups, bookmarks, dashboard (standalone)
 ├── sql.py             # CLI SQL query tool for reddit_archive.db
-├── fonts/             # Self-hosted Sora, DM Sans, and Font Awesome assets
+├── fonts/             # Self-hosted Sora, DM Sans, Fira Code, and Font Awesome assets
 ├── templates/
 │   ├── base.html      # Layout shell: header with settings menu, sidebar rail, footer
 │   ├── feed.html      # Main feed: filter bar + post list + pagination (feed & bookmarks views)

@@ -51,6 +51,7 @@
       </header>
 
       <div class="layout-wrapper">
+        {% block sidebar_rail %}
         <aside class="sidebar" id="sidebar" aria-label="Groups">
           <nav class="sidebar-groups">
             {% block sidebar %}{% endblock %}
@@ -59,6 +60,7 @@
             {% block sidebar_footer %}{% endblock %}
           </div>
         </aside>
+        {% endblock %}
         <div class="content-col">
           <main class="content" id="main-content" role="main">
             {% block content %}{% endblock %}
