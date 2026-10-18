@@ -681,6 +681,11 @@ select {
   gap: 2px;
   flex: 1;
 }
+.sidebar-sep {
+  border-top: var(--border-w) solid var(--border);
+  margin: var(--space-1) 0;
+  flex-shrink: 0;
+}
 .sidebar-footer {
   border-top: 1px solid var(--border);
   padding-top: var(--space-3);

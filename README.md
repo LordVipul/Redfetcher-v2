@@ -6,7 +6,7 @@ A local web application that archives Reddit posts from any subreddit since its 
 
 - **`scraper.py`** — Standalone Python script. Fetches posts from Arctic Shift and stores them in SQLite. Run independently: `python scraper.py` or `python scraper.py <subreddit>`.
 - **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page, group-driven post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks.
-- **`config.py`** — `GROUPS` (sidebar order: key → short label + subreddits) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings.
+- **`config.py`** — `GROUPS` (key → short label + subreddits; the sidebar sorts groups by name) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings.
 - **`database.py`** — SQLite init, batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, and full bookmarks CRUD.
 - **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
 - **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks.
@@ -159,7 +159,7 @@ GROUPS = {
     ]),
     "web": ("Web dev", ["css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev"]),
     "design": ("Design", ["accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design"]),
-    ...                             # 18 groups total, in sidebar order
+    ...                             # 18 groups total (sidebar sorts them by name)
 }
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
 REQUEST_DELAY = 1.0           # Minimum delay after each API request
@@ -174,9 +174,9 @@ QUERY_TIMEOUT_BACKOFF = (20, 40) # Escalating waits (s) for query-timeout 422 re
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
 
-Groups are ordered (dict insertion order = sidebar order) and subreddits within a group are
-alphabetical. `SUBREDDITS` is derived from `GROUPS`, so the scraper needs no changes when groups
-change.
+Subreddits within a group are alphabetical; the web sidebar sorts groups by name (with `All`
+first and Bookmarks last). `SUBREDDITS` is derived from `GROUPS`, so the scraper needs no changes
+when groups change.
 
 The scraper accepts **any** subreddit as a command-line argument, not just the ones in the groups.
 

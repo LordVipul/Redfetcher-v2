@@ -1,10 +1,10 @@
 from pathlib import Path
 
 # Groups drive both the scraper (via SUBREDDITS below) and the web UI sidebar.
-# Each entry: key -> (short label, subreddits). Order is the sidebar order;
-# subreddits inside a group are alphabetical.
+# Each entry: key -> (short label, subreddits). The sidebar sorts groups by
+# label alphabetically; "All" stays first and Bookmarks last either way.
 GROUPS = {
-    "ai": ("AI", [
+    "ai": ("A.I.", [
         "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
     ]),
     "web": ("Web dev", [

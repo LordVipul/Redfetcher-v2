@@ -157,13 +157,17 @@ def build_sidebar(active_key, view):
     counts = {s["subreddit"]: s["count"] for s in stats}
     total = sum(counts.values())
     items = [{"key": "all", "label": "All", "count": total, "active": view == "feed" and active_key == "all"}]
-    for key, (label, subs) in config.GROUPS.items():
-        items.append({
+    groups = [
+        {
             "key": key,
             "label": label,
             "count": sum(counts.get(s, 0) for s in subs),
             "active": view == "feed" and active_key == key,
-        })
+        }
+        for key, (label, subs) in config.GROUPS.items()
+    ]
+    groups.sort(key=lambda g: g["label"].casefold())
+    items.extend(groups)
     return items
 
 

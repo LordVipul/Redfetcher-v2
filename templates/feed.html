@@ -12,6 +12,7 @@
     ><span class="group-label">{{ item.label }}</span
     ><span class="group-count">{{ item.count }}</span></a
   >
+  {% if loop.first %}<div class="sidebar-sep" role="presentation"></div>{% endif %}
   {% endfor %}
 {% endblock %}
 
