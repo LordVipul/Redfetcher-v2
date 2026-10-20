@@ -272,6 +272,12 @@ select {
 .filter-bar select {
   cursor: pointer;
 }
+/* Fixed so the browser's auto-fit doesn't resize per group: 13rem covers the
+   widest option this config produces ("All in <group>" / longest sub name);
+   future longer names clip in the closed control instead of shifting the bar. */
+.filter-bar #filter-subreddit {
+  width: 13rem;
+}
 .filter-bar select option {
   background: var(--surface);
   color: var(--text);
