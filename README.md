@@ -72,7 +72,7 @@ python scraper.py unixporn         # Scrape a specific subreddit
 The scraper:
 
 - Connects to the Arctic Shift API (`arctic-shift.photon-reddit.com`)
-- Uses exact UTC timestamps and sequential requests with a one-second delay
+- Uses exact UTC timestamps and sequential requests with a two-second delay
 - Starts with 30-day windows and splits any window that returns the 100-post API cap
 - Splits down to a 1-second floor; if a single second still returns 100 posts (a bot/spam flood), it captures up to 200 via ascending + descending queries and advances past the rest
 - Stores posts in `reddit_archive.db` using batch `INSERT OR IGNORE` (no duplicates)
@@ -80,6 +80,7 @@ The scraper:
 - Rechecks the last 48 hours on resumed runs to catch recently archived posts
 - Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
 - Retries query-timeout `422` responses with escalating waits (20s, 40s); if the query still times out it falls back to splitting the window
+- Follows every recovered query timeout with an adaptive cooldown that doubles with consecutive timeouts (2s → 30s cap), backing off while the API is strained and returning to the normal pace after a clean stretch
 - Logs HTTP status, response summary, and rate-limit reset headers for API failures
 - Skips a subreddit on an unrecoverable error and continues with the rest, instead of aborting the whole run
 - **One Ctrl+C stops the entire scrape** — no need to interrupt subreddit-by-subreddit
@@ -175,7 +176,7 @@ GROUPS = {
     ...                             # 15 groups total (sidebar sorts them by name)
 }
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
-REQUEST_DELAY = 1.0           # Minimum delay after each API request
+REQUEST_DELAY = 2.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 30           # API request timeout
 MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries)
 BACKOFF_FACTOR = 2.0          # Exponential backoff factor
@@ -184,6 +185,8 @@ START_YEAR = 2005             # Earliest year checked during full backfill
 POSTS_PER_REQUEST = 100       # Maximum requested from the API
 MIN_SCRAPE_WINDOW_SECONDS = 1 # Stop splitting a saturated window below this width
 QUERY_TIMEOUT_BACKOFF = (20, 40) # Escalating waits (s) for query-timeout 422 retries
+TIMEOUT_COOLDOWN_BASE = 2.0   # Extra sleep after a request that recovered a query timeout; doubles per consecutive timeout
+TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout cooldown
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 ```
 
@@ -272,7 +275,7 @@ redfetcher-v2/
 - **No posts showing**: Run `python scraper.py` first, then `python server.py`.
 - **Import error**: Ensure `arcshiftwrap` is installed (`pip install arcshiftwrap`). Import path is `arcshiftwrap.arctic_shift`, not `arcshiftwrap`.
 - **Database locked**: Close any other connections to `reddit_archive.db`.
-- **Slow scraping**: Full backfills make more API requests for dense subreddits; the scraper stays sequential and one request per second. Resumed runs recheck only the checkpoint plus the configured overlap.
+- **Slow scraping**: Full backfills make more API requests for dense subreddits; the scraper stays sequential, two seconds per request, with adaptive cooldowns when the API reports query timeouts. Resumed runs recheck only the checkpoint plus the configured overlap.
 - **Ctrl+C stops the entire scrape**: No need to interrupt subreddit-by-subreddit.
 - **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button on any post card to toggle bookmarks.
 

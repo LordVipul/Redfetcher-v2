@@ -23,6 +23,9 @@ class QueryTimeoutError(ScrapeError):
 
 
 class LoggingArcticShiftClient(ArcticShiftClient):
+    # Consecutive query-timeout 422s; drives the post-success cooldown in request()
+    timeout_streak = 0
+
     def _body_summary(self, response):
         text = " ".join((response.text or "").split())
         if not text:
@@ -43,6 +46,9 @@ class LoggingArcticShiftClient(ArcticShiftClient):
     def _query_timeout_delay(self, attempt):
         backoff = config.QUERY_TIMEOUT_BACKOFF
         return backoff[min(attempt, len(backoff)) - 1]
+
+    def _query_timeout_cooldown(self):
+        return min(config.TIMEOUT_COOLDOWN_BASE ** self.timeout_streak, config.TIMEOUT_COOLDOWN_CAP)
 
     def request(self, endpoint, params=None):
         url = f"{self.base_url}{endpoint}"
@@ -115,6 +121,7 @@ class LoggingArcticShiftClient(ArcticShiftClient):
             query_timeout = "timeout" in body.lower() or "slow down" in body.lower()
 
             if status == 422 and query_timeout:
+                self.timeout_streak += 1
                 if attempt >= max_attempts:
                     log.error(
                         "API query timeout (attempt %d/%d) status=422 reason=%s body=%s "
@@ -239,6 +246,15 @@ class LoggingArcticShiftClient(ArcticShiftClient):
                     query_timeout_retries,
                     url,
                 )
+            if self.timeout_streak:
+                cooldown = self._query_timeout_cooldown()
+                log.info(
+                    "API cooling down %.1fs after query timeout(s) url=%s",
+                    cooldown,
+                    url,
+                )
+                time.sleep(cooldown)
+                self.timeout_streak = 0
             return data
 
         raise ScrapeError(f"Unexpected API request failure: {url}")
