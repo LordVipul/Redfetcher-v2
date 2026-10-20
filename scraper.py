@@ -607,7 +607,7 @@ if __name__ == "__main__":
             subreddit = sys.argv[1]
             if not SUBREDDIT_RE.match(subreddit):
                 log.error(
-                    "Invalid subreddit name: %r (must be 3-21 chars: letters, digits, underscores)",
+                    "Invalid subreddit name: %r (must be 2-21 chars: letters, digits, underscores)",
                     subreddit,
                 )
                 sys.exit(1)

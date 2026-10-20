@@ -11,7 +11,7 @@ GROUPS = {
         "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
     ]),
     "design": ("Design", [
-        "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
+        "accessibility", "design_critiques", "DesignPorn", "graphic_design", "typography", "UI_Design", "userexperience", "web_design",
     ]),
     "cs": ("CS", [
         "algorithms", "AskProgramming", "codegolf", "coding", "compsci", "computerscience", "DailyProgrammer", "learnprogramming", "leetcode", "osdev", "programming",

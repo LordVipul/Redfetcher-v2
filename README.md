@@ -171,7 +171,7 @@ GROUPS = {
         "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
     ]),
     "web": ("Web dev", ["css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev"]),
-    "design": ("Design", ["accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design"]),
+    "design": ("Design", ["accessibility", "design_critiques", "DesignPorn", "graphic_design", "typography", "UI_Design", "userexperience", "web_design"]),
     ...                             # 15 groups total (sidebar sorts them by name)
 }
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
