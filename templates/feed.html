@@ -97,6 +97,11 @@
             <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="Bookmark this post" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="Bookmark this post">
                 <i class="fa-solid fa-bookmark"></i>
             </button>
+            {% if not is_bookmarks %}
+            <button class="hide-btn" data-post-id="{{ post.id }}" title="Hide this post" aria-label="Hide this post">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            {% endif %}
         </span>
     </div>
     {% endfor %}

@@ -444,6 +444,17 @@ select {
   opacity: 0.4;
   pointer-events: none;
 }
+.post-item > .r-action .hide-btn {
+  opacity: 0;
+}
+.post-item > .r-action .hide-btn:hover {
+  color: var(--text-muted);
+  filter: brightness(1.6);
+}
+.post-item:hover > .r-action .hide-btn,
+.post-item > .r-action .hide-btn:focus-visible {
+  opacity: 1;
+}
 
 /* ── Pagination ─────────────────────────────── */
 .pagination {

@@ -47,6 +47,9 @@ def init_db():
         had_fts = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='posts_fts'"
         ).fetchone() is not None
+        had_hidden = conn.execute(
+            "SELECT 1 FROM pragma_table_info('posts') WHERE name='hidden'"
+        ).fetchone() is not None
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS posts (
@@ -57,6 +60,7 @@ def init_db():
                 num_comments INTEGER,
                 created_utc REAL,
                 subreddit TEXT NOT NULL,
+                hidden TEXT NOT NULL DEFAULT 'false',
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts(subreddit);
@@ -80,6 +84,11 @@ def init_db():
                 next_start REAL NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS link_checks (
+                url TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
                 title,
                 content='posts',
@@ -99,6 +108,9 @@ def init_db():
             """
         )
         migrate_bookmarks_foreign_key(conn)
+        if not had_hidden:
+            conn.execute("ALTER TABLE posts ADD COLUMN hidden TEXT NOT NULL DEFAULT 'false'")
+        _ensure_fts_update_guard(conn)
         if not had_fts:
             conn.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
         conn.commit()
@@ -108,6 +120,31 @@ def init_db():
             pass  # e.g. Windows: chmod is limited to the read-only flag
     finally:
         conn.close()
+
+
+def _ensure_fts_update_guard(conn):
+    """Recreate posts_fts_au so hidden-flag updates don't churn the FTS index.
+
+    The AFTER UPDATE trigger rewrites the title into posts_fts on every
+    update; bulk maintenance updates set only `hidden`, leaving `title`
+    untouched, so the rewrite is skipped for unchanged titles.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'posts_fts_au'"
+    ).fetchone()
+    if row is None or "old.title IS NOT new.title" in row[0]:
+        return
+    conn.execute("DROP TRIGGER posts_fts_au")
+    conn.execute(
+        """
+        CREATE TRIGGER posts_fts_au AFTER UPDATE ON posts
+        WHEN old.title IS NOT new.title
+        BEGIN
+            INSERT INTO posts_fts(posts_fts, rowid, title) VALUES ('delete', old.rowid, old.title);
+            INSERT INTO posts_fts(rowid, title) VALUES (new.rowid, new.title);
+        END;
+        """
+    )
 
 
 def _title_search_clause(alias, q):
@@ -176,7 +213,8 @@ def get_stats():
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT subreddit, COUNT(*) as count, MAX(created_utc) as last_updated FROM posts GROUP BY subreddit ORDER BY count DESC"
+            "SELECT subreddit, COUNT(*) as count, MAX(created_utc) as last_updated "
+            "FROM posts WHERE hidden = 'false' GROUP BY subreddit ORDER BY count DESC"
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -200,12 +238,12 @@ def _min_filter_clauses(alias, min_score, min_comments):
     return clauses, params
 
 
-def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", limit=100, q=None, page=1, min_score=None, min_comments=None, subreddits=None):
+def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", limit=100, q=None, page=1, min_score=None, min_comments=None, subreddits=None, offset=None):
     conn = get_connection()
     try:
         # Non-subreddit filters, shared by the count query and every row query.
         # Bare " AND …" clauses; each query supplies its own WHERE 1=1.
-        filters = ""
+        filters = " AND hidden = 'false'"
         params = []
         if start_date:
             filters += " AND created_utc >= ?"
@@ -233,7 +271,10 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         if sort not in sort_map:
             raise ValueError(f"invalid sort: {sort!r}")
         col, direction = sort_map[sort]
-        offset = (page - 1) * limit
+        # `offset` overrides the page-derived offset (single-row top-ups after
+        # hides, which must read past the page window without shifting pages).
+        if offset is None:
+            offset = (page - 1) * limit
 
         if subreddit:
             total = conn.execute(
@@ -296,8 +337,63 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
 def get_all_subreddits():
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT DISTINCT subreddit FROM posts ORDER BY subreddit").fetchall()
+        rows = conn.execute(
+            "SELECT DISTINCT subreddit FROM posts WHERE hidden = 'false' ORDER BY subreddit"
+        ).fetchall()
         return [r["subreddit"] for r in rows]
+    finally:
+        conn.close()
+
+
+# ── Hide / curation ───────────────────────────────
+
+def hide_post(post_id):
+    """Set hidden='true' for one post. Returns False when the post doesn't exist."""
+    conn = get_connection()
+    try:
+        exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if exists is None:
+            return False
+        # Idempotent: already-hidden rows are left alone (no churn).
+        conn.execute(
+            "UPDATE posts SET hidden = 'true' WHERE id = ? AND hidden = 'false'",
+            (post_id,),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def unhide_post(post_id):
+    """Reverse a hide: set hidden='false'. Returns False when the post doesn't exist."""
+    conn = get_connection()
+    try:
+        exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if exists is None:
+            return False
+        conn.execute(
+            "UPDATE posts SET hidden = 'false' WHERE id = ? AND hidden = 'true'",
+            (post_id,),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def hide_posts_by_urls(urls):
+    """Bulk-hide posts by URL (dead-link results), idempotent. Returns count."""
+    if not urls:
+        return 0
+    conn = get_connection()
+    try:
+        cursor = conn.executemany(
+            "UPDATE posts SET hidden = 'true' WHERE url = ? AND hidden = 'false'",
+            [(u,) for u in urls],
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 
@@ -432,16 +528,20 @@ def get_dashboard_data(top_posts_limit=10):
             conn.execute(
                 "SELECT COUNT(*) AS posts, COUNT(DISTINCT subreddit) AS subreddits, "
                 "MIN(created_utc) AS first_post, MAX(created_utc) AS last_post, "
-                "SUM(score) AS total_score FROM posts"
+                "SUM(score) AS total_score FROM posts WHERE hidden = 'false'"
             ).fetchone()
         )
         totals["bookmarks"] = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+        totals["hidden"] = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE hidden = 'true'"
+        ).fetchone()[0]
 
         per_subreddit = [
             dict(r)
             for r in conn.execute(
                 "SELECT subreddit, COUNT(*) AS count, AVG(score) AS avg_score, "
-                "MAX(created_utc) AS last_post FROM posts GROUP BY subreddit ORDER BY count DESC"
+                "MAX(created_utc) AS last_post FROM posts WHERE hidden = 'false' "
+                "GROUP BY subreddit ORDER BY count DESC"
             ).fetchall()
         ]
 
@@ -449,7 +549,7 @@ def get_dashboard_data(top_posts_limit=10):
             dict(r)
             for r in conn.execute(
                 "SELECT strftime('%Y-%m', created_utc, 'unixepoch') AS month, COUNT(*) AS count "
-                "FROM posts GROUP BY month ORDER BY month"
+                "FROM posts WHERE hidden = 'false' GROUP BY month ORDER BY month"
             ).fetchall()
         ]
 
@@ -457,7 +557,7 @@ def get_dashboard_data(top_posts_limit=10):
             dict(r)
             for r in conn.execute(
                 "SELECT id, title, url, subreddit, score, num_comments, created_utc "
-                "FROM posts ORDER BY score DESC LIMIT ?",
+                "FROM posts WHERE hidden = 'false' ORDER BY score DESC LIMIT ?",
                 (top_posts_limit,),
             ).fetchall()
         ]

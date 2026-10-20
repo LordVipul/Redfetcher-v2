@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 # Groups drive both the scraper (via SUBREDDITS below) and the web UI sidebar.
 # Each entry: key -> (short label, subreddits). The sidebar sorts groups by
@@ -58,7 +59,9 @@ CLIENT_TIMEOUT = 30          # Long enough for Cloudflare 52x outage pages to su
 MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries); formerly MAX_RETRIES = 2
 BACKOFF_FACTOR = 2.0
 
-DB_PATH = str(Path(__file__).resolve().parent / "reddit_archive.db")
+# Database path. RF_DB_PATH lets a second instance (e.g. a dev copy under
+# _dev/) run against a different file without touching the real archive.
+DB_PATH = os.environ.get("RF_DB_PATH") or str(Path(__file__).resolve().parent / "reddit_archive.db")
 
 START_YEAR = 2005
 POSTS_PER_REQUEST = 100
@@ -67,3 +70,19 @@ QUERY_TIMEOUT_BACKOFF = (20, 40)  # Escalating waits (s) for query-timeout 422 r
 TIMEOUT_COOLDOWN_BASE = 2.0   # Extra sleep after a request that recovered a query timeout; doubles per consecutive timeout
 TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout cooldown
 RESUME_OVERLAP_HOURS = 48
+
+# Post curation (maintenance.py): the duplicate rule hides same-subreddit
+# posts with an identical title longer than this, when every copy landed
+# inside this window; the earliest copy is always kept.
+DUP_TITLE_MIN_CHARS = 30
+DUP_WINDOW_SECONDS = 7 * 86400
+
+# Dead-link checker: an external URL that answers 404/410 or fails DNS is
+# hidden automatically; anything less conclusive (timeouts, 5xx, 403) gets
+# marked for a recheck after DEAD_LINK_RECHECK_DAYS instead. Reddit permalinks
+# are never checked — reddit serves 200 even for deleted posts, so checking
+# them can never distinguish readable from removed content.
+DEAD_LINK_CHECK_LIMIT = 2000      # max URLs checked per maintenance run
+DEAD_LINK_CONCURRENCY = 8         # parallel HTTP requests
+DEAD_LINK_TIMEOUT = 15            # seconds per request
+DEAD_LINK_RECHECK_DAYS = 7        # recheck inconclusive statuses after this

@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta, timezone
 import config
 import database
+import maintenance
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -110,6 +111,18 @@ def bad_request(message):
 
 
 templates.env.filters["datetimeformat"] = format_date
+
+# ── Startup maintenance ──────────────────────────────────────
+# Curation jobs (duplicate hiding + dead-link check) run once per startup in
+# a background thread; they never block or fail the server itself.
+_background_tasks = set()
+
+
+@app.on_event("startup")
+async def run_startup_maintenance():
+    task = asyncio.create_task(asyncio.to_thread(maintenance.run_maintenance))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def query_params(page, filters=None, group_key=None):
@@ -362,6 +375,7 @@ async def api_posts(
     page: int = Query(1, ge=1),
     min_score: str = Query(None),
     min_comments: str = Query(None),
+    offset: int = Query(None, ge=0),
 ):
     if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
         return bad_request(err)
@@ -376,6 +390,9 @@ async def api_posts(
         start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
         min_score=min_score, min_comments=min_comments,
+        # Raw-position fetches (row top-ups after hides) read past the page
+        # window without touching page semantics.
+        offset=offset,
     )
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
@@ -476,6 +493,26 @@ async def remove_bookmark(post_id: str):
     await asyncio.to_thread(database.remove_bookmark, post_id)
     log.info(f"DELETE /bookmarks/{post_id} — bookmark removed")
     return JSONResponse({"status": "unbookmarked", "post_id": post_id})
+
+
+@app.post("/posts/{post_id}/hide")
+async def hide_post(post_id: str):
+    hidden = await asyncio.to_thread(database.hide_post, post_id)
+    if not hidden:
+        log.info("POST /posts/%s/hide — post not found", post_id)
+        return JSONResponse(status_code=404, content={"error": "post not found"})
+    log.info(f"POST /posts/{post_id}/hide — post hidden")
+    return JSONResponse({"status": "hidden", "post_id": post_id})
+
+
+@app.delete("/posts/{post_id}/hide")
+async def unhide_post(post_id: str):
+    unhidden = await asyncio.to_thread(database.unhide_post, post_id)
+    if not unhidden:
+        log.info("DELETE /posts/%s/hide — post not found", post_id)
+        return JSONResponse(status_code=404, content={"error": "post not found"})
+    log.info(f"DELETE /posts/{post_id}/hide — post unhidden")
+    return JSONResponse({"status": "unhidden", "post_id": post_id})
 
 
 # ── Dashboard ─────────────────────────────────────────────────

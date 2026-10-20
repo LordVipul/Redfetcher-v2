@@ -5,11 +5,12 @@ A local web application that archives Reddit posts from any subreddit since its 
 ## Architecture
 
 - **`scraper.py`** — Standalone Python script. Fetches posts from Arctic Shift and stores them in SQLite. Run independently: `python scraper.py` or `python scraper.py <subreddit>`.
-- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks.
-- **`config.py`** — `GROUPS` (key → short label + subreddits; the sidebar sorts groups by name) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings.
-- **`database.py`** — SQLite init, batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, and full bookmarks CRUD.
+- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks and hide flags. On startup it also runs `maintenance.py` in a background thread.
+- **`maintenance.py`** — Curation jobs run once per server startup: hide exact duplicates (same subreddit + identical title >30 chars, all copies within 7 days — earliest kept) and check external URLs for rot (404/410 or DNS failure → hidden; inconclusive statuses cached and rechecked later). Idempotent and converging.
+- **`config.py`** — `GROUPS` (key → short label + subreddits; the sidebar sorts groups by name) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings and duplicate/dead-link thresholds. `RF_DB_PATH` env var points the stack at a different database file (e.g. the dev copy under `_dev/`).
+- **`database.py`** — SQLite init and migrations (including the `hidden` column and `link_checks` cache), batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, full bookmarks CRUD, and single/bulk hide helpers.
 - **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
-- **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks.
+- **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks and hidden flags.
 
 ## Requirements
 
@@ -102,8 +103,10 @@ The web UI provides:
     - Date range (start/end)
     - Result limit (50, 100, 200, 500)
 - **Post cards** with title (clickable link to Reddit), subreddit badge (click to filter), score, comment count, date, and bookmark button
+- **Hide button** (X, appears on row hover, feed view only) — hides the post: it stops rendering everywhere and a replacement row is fetched so the page stays at full length; the toast offers **Undo**, which restores the row in place (or, if the page was re-fetched meanwhile, just fixes the counters); hidden rows are pruned later via SQL
+- **Automatic curation at startup** (`maintenance.py`) — exact duplicates and dead external links are hidden before you ever see them; both rules only touch link-level facts, never score-based quality judgement
 - **Bookmarks** with undo toast notifications; the sidebar count updates live
-- **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list
+- **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list. Hidden posts are excluded from every panel; the totals card includes an explicit `hidden` counter.
 - **Settings menu** (gear icon) — dashboard link, hide/show sidebar, text size, reduce motion. All preferences persist in `localStorage`
 - Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?group=tools&sort=score_desc`)
 - Keyboard shortcuts: `Ctrl+K` or `/` to focus search
@@ -119,6 +122,8 @@ The web UI provides:
 | `GET /dashboard`              | Dashboard page (HTML)                   |
 | `POST /bookmarks/{post_id}`   | Add a bookmark                          |
 | `DELETE /bookmarks/{post_id}` | Remove a bookmark                       |
+| `POST /posts/{post_id}/hide`  | Hide a post (never rendered again)      |
+| `DELETE /posts/{post_id}/hide` | Unhide a post (backing the undo toast) |
 
 Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:
 
@@ -135,6 +140,7 @@ Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:
 | `page`         | int    | 1        | Page number (omitted from the address bar on page 1) |
 | `min_score`    | int    | none     | Minimum score (`>=`)         |
 | `min_comments` | int    | none     | Minimum comment count (`>=`) |
+| `offset`       | int    | none     | `/api/posts` only: raw starting position, overriding the page-derived one (single-row top-ups after a hide read past the page window) |
 
 The address bar keeps the short form: `/` for All, `/?group=<key>` when the
 current scope exactly matches a config group, and `/?subreddit=…` for everything
@@ -188,6 +194,14 @@ QUERY_TIMEOUT_BACKOFF = (20, 40) # Escalating waits (s) for query-timeout 422 re
 TIMEOUT_COOLDOWN_BASE = 2.0   # Extra sleep after a request that recovered a query timeout; doubles per consecutive timeout
 TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout cooldown
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
+
+# Post curation (maintenance.py)
+DUP_TITLE_MIN_CHARS = 30          # Duplicate rule: identical title, same subreddit, this length or longer
+DUP_WINDOW_SECONDS = 604800       # ...with all copies inside this window (earliest kept)
+DEAD_LINK_CHECK_LIMIT = 2000      # External URLs checked per maintenance run
+DEAD_LINK_CONCURRENCY = 8         # Parallel HTTP requests
+DEAD_LINK_TIMEOUT = 15            # Seconds per request
+DEAD_LINK_RECHECK_DAYS = 7        # Recheck inconclusive link statuses after this
 ```
 
 Subreddits within a group are alphabetical; the web sidebar sorts groups by name (with `All`
@@ -210,6 +224,7 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | `num_comments` | Comment count                       |
 | `created_utc`  | Unix timestamp (for date filtering) |
 | `subreddit`    | Subreddit name                      |
+| `hidden`       | `'true'`/'false' — hidden posts never render anywhere; prune with `DELETE FROM posts WHERE hidden = 'true'` |
 | `fetched_at`   | When the record was inserted        |
 
 ### Bookmarks Table
@@ -219,6 +234,14 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | `id`         | Auto-increment bookmark ID                       |
 | `post_id`    | Reference to `posts.id` (unique, cascade delete) |
 | `created_at` | When the bookmark was created                    |
+
+### Link Checks Table
+
+| Field       | Description                                              |
+| ----------- | -------------------------------------------------------- |
+| `url`       | Checked external URL (primary key)                       |
+| `status`    | Last check result: `ok`, `dead`, `dns_fail`, or `error`  |
+| `checked_at`| When the check ran (`dead`/`dns_fail` are never rechecked; others after `DEAD_LINK_RECHECK_DAYS`) |
 
 ### Scrape State Table
 

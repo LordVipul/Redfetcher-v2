@@ -214,6 +214,132 @@
     };
   }
 
+  // ── Hide posts ─────────────────────────────────
+  // A hidden row leaves the feed and a replacement is fetched so the page
+  // stays full — keep hiding without re-touching pagination.
+
+  function afterHideRemoved() {
+    window.__total = Math.max(0, (window.__total || 0) - 1);
+    var tp = getTotalPages(window.__total, state.filters.limit);
+    updateSortInfo(window.__total, state.page, tp);
+    updatePagination(state.page, tp);
+  }
+
+  function afterHideReverted() {
+    window.__total = (window.__total || 0) + 1;
+    var tp = getTotalPages(window.__total, state.filters.limit);
+    updateSortInfo(window.__total, state.page, tp);
+    updatePagination(state.page, tp);
+  }
+
+  function undoHide(postId, undoState) {
+    return function () {
+      fetch("/posts/" + postId + "/hide", { method: "DELETE" })
+        .then(function (res) {
+          if (!res.ok) throw new Error();
+          return res.json();
+        })
+        .then(function () {
+          if (document.querySelector('.post-item[data-post-id="' + postId + '"]')) return;
+          var restored = false;
+          var feed = document.getElementById("post-feed");
+          // Same fetch epoch: the page is still the one the row left —
+          // re-insert it exactly where it was.
+          if (
+            feed &&
+            feed.querySelector(".post-item") &&
+            undoState &&
+            undoState.epoch === renderEpoch
+          ) {
+            var tmp = document.createElement("span");
+            tmp.innerHTML = undoState.html;
+            var node = tmp.firstElementChild;
+            if (node) {
+              feed.insertBefore(node, feed.children[undoState.index] || null);
+              restored = true;
+            }
+          }
+          // Counters are right either way: one unhide always adds one row.
+          afterHideReverted();
+          if (!restored) {
+            // Feed was re-fetched since the hide; the row reappears on the
+            // next natural view of its position.
+            toast("Undone — visible again on its page", "success");
+          }
+        })
+        .catch(function () {
+          toast("Failed to undo", "error");
+        });
+    };
+  }
+
+  function refillFeed() {
+    if (isBookmarksView()) return;
+    fetch(apiBase() + "?" + buildQuery(1, { limit: 1, offset: nextFeedIndex }))
+      .then(function (res) {
+        return res.json().then(function (data) {
+          return { ok: res.ok, data: data };
+        });
+      })
+      .then(function (response) {
+        if (!response.ok) return; // transient: navigation or the next fetch reconciles
+        var posts = (response.data && response.data.posts) || [];
+        if (posts.length === 0) return; // end of this filter set — page just runs short
+        nextFeedIndex += 1;
+        var post = posts[0];
+        // If the same row is already rendered, offsets shifted under us
+        // (e.g. the scraper inserted older overlapping rows): skip it.
+        if (document.querySelector('.post-item[data-post-id="' + post.id + '"]')) return;
+        var feed = document.getElementById("post-feed");
+        if (!feed) return;
+        feed.insertAdjacentHTML(
+          "beforeend",
+          renderPost(post, (window.__bookmarked || []).indexOf(post.id) !== -1)
+        );
+      })
+      .catch(function () {}); // transient failures never block the hide itself
+  }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".hide-btn[data-post-id]");
+    if (!btn || btn.classList.contains("busy")) return;
+    if (isBookmarksView()) return;
+    btn.classList.add("busy");
+    var postId = btn.dataset.postId;
+    var row = btn.closest(".post-item");
+    // Row snapshot for undo: exact child index within the feed + markup.
+    var undoState = null;
+    if (row) {
+      var idx = Array.prototype.indexOf.call(
+        document.getElementById("post-feed").children,
+        row
+      );
+      undoState = { index: idx, html: row.outerHTML, epoch: renderEpoch };
+    }
+    fetch("/posts/" + postId + "/hide", { method: "POST" })
+      .then(function (res) {
+        if (!res.ok) throw new Error();
+        toastWithUndo("Post hidden", "info", undoHide(postId, undoState));
+        if (!row) {
+          refillFeed();
+          return;
+        }
+        row.style.transition = "opacity 0.15s ease";
+        row.style.opacity = "0";
+        setTimeout(function () {
+          if (row.parentNode) row.remove();
+          afterHideRemoved();
+          refillFeed();
+        }, 150);
+      })
+      .catch(function () {
+        toast("Failed to hide post", "error");
+      })
+      .finally(function () {
+        btn.classList.remove("busy");
+      });
+  });
+
   function renderPost(post, isBookmarked) {
     var url =
       post.url && post.url.startsWith("http")
@@ -252,6 +378,11 @@
       '" aria-label="' +
       (isBookmarked ? "Remove bookmark" : "Bookmark this post") +
       '"><i class="fa-solid fa-bookmark"></i></button>';
+    var hideBtn = isBookmarksView()
+      ? ""
+      : '<button class="hide-btn" data-post-id="' +
+        escapeHtml(post.id || "") +
+        '" title="Hide this post" aria-label="Hide this post"><i class="fa-solid fa-xmark"></i></button>';
     return (
       '<div class="post-item" role="listitem" data-post-id="' +
       escapeHtml(post.id || "") +
@@ -269,6 +400,7 @@
       comments +
       '<span class="r-action">' +
       btn +
+      hideBtn +
       "</span>" +
       "</div>"
     );
@@ -292,6 +424,16 @@
     },
     page: 1,
   };
+
+  // Absolute index (within the current filter set) of the first row the
+  // feed window has not fetched yet. After a page lands this is one past
+  // the last rendered row; top-up loads move it forward one at a time.
+  var nextFeedIndex = 0;
+
+  // Bumped whenever a server-authored page replaces the feed content, so
+  // hide-undo snapshots older than the current page skip re-insertion and
+  // only fix counters.
+  var renderEpoch = 0;
 
   function parseSubSet(str) {
     return (str || "").split(",").filter(Boolean);
@@ -334,7 +476,7 @@
     state.page = parseInt(params.get("page"), 10) || 1;
   }
 
-  function buildQuery(page) {
+  function buildQuery(page, overrides) {
     var params = new URLSearchParams();
     if (isBookmarksView()) params.set("view", "bookmarks");
     if (state.filters.subreddit) params.set("subreddit", state.filters.subreddit);
@@ -347,6 +489,11 @@
       params.set("limit", state.filters.limit);
     setMinParams(params, state.filters);
     params.set("page", page || state.page || 1);
+    if (overrides) {
+      Object.keys(overrides).forEach(function (k) {
+        params.set(k, overrides[k]);
+      });
+    }
     return params.toString();
   }
 
@@ -566,6 +713,9 @@
         var effectivePage = data.page || p;
         state.page = effectivePage;
         if (effectivePage !== p) syncUrl("replace");
+        nextFeedIndex =
+          (effectivePage - 1) * state.filters.limit +
+          (data.posts ? data.posts.length : 0);
 
         if (Array.isArray(data.subreddits)) rebuildSubredditSelect(data.subreddits);
         if (data.bookmarked_ids) {
@@ -580,6 +730,7 @@
             .concat(data.bookmarked_ids);
         }
         renderFeed(data.posts, window.__bookmarked || []);
+        renderEpoch++;
         window.__total = data.total;
         updateSortInfo(data.total, effectivePage, data.total_pages);
         updatePagination(effectivePage, data.total_pages);
@@ -1109,6 +1260,11 @@
   stateFromUrl();
   syncViewUi();
   setActiveGroupButton();
+  // The first page is server-rendered: seed the top-up index from what
+  // actually rendered, so top-ups read past the visible window immediately.
+  nextFeedIndex =
+    ((window.__page || 1) - 1) * state.filters.limit +
+    document.querySelectorAll("#post-feed .post-item").length;
   // Server already rendered the first page; rewrite the URL once to the
   // display form so the address bar matches the flow: /, ?group=<key> for an
   // exact config match, ?subreddit=… otherwise (stale ?group= keys degrade
