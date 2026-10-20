@@ -52,7 +52,7 @@ def to_end_timestamp(date_str):
 
 # ── Input validation ─────────────────────────────────────────
 
-SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
+SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{2,21}$")
 POST_SORTS = {"score_desc", "score_asc", "comments_desc", "comments_asc", "newest", "oldest"}
 BOOKMARK_SORTS = {"oldest", "newest", "score_desc", "score_asc", "comments_desc", "comments_asc"}
 VIEWS = {"feed", "bookmarks"}
@@ -394,8 +394,13 @@ async def api_bookmarks(
 ):
     if err := validate_filters(subreddit, start, end, sort, q, BOOKMARK_SORTS, min_score, min_comments):
         return bad_request(err)
+    names = split_subreddit_param(subreddit or "")
+    if len(names) > 1:
+        return bad_request("bookmarks support a single subreddit, not a set")
     min_score = parse_min_filter(min_score)
     min_comments = parse_min_filter(min_comments)
+    subreddit = names[0] if names else None
+    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
@@ -412,11 +417,12 @@ async def api_bookmarks(
                 subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
                 min_score=min_score, min_comments=min_comments,
             )
-    log.info(f"GET /api/bookmarks — {len(results)} bookmarks")
+    log.info(f"GET /api/bookmarks — {len(results)} bookmarks (sub={subreddit!r}, page={page})")
     return {
         "posts": results,
         "total": total,
         "bookmarked_ids": [p["id"] for p in results],
+        "subreddits": all_subreddits,
         "page": page,
         "total_pages": total_pages,
     }

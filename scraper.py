@@ -11,7 +11,7 @@ import config
 import database
 
 
-SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{3,21}$")
+SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{2,21}$")
 
 
 class ScrapeError(RuntimeError):

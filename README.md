@@ -140,7 +140,7 @@ group sends `/?subreddit=AutoHotkey,git,neovim,Rainmeter,vim,vscode,zsh`), and t
 sidebar highlight plus the "All in <group>" dropdown label are derived by matching the
 current set against the current config (exact match, then smallest containing group;
 anything else shows as All). Legacy `?group=` links are simply ignored — removed, renamed,
-and merged keys can never 400. Subreddit names must still match `^[a-zA-Z0-9_]{3,21}$`
+and merged keys can never 400. Subreddit names must still match `^[a-zA-Z0-9_]{2,21}$`
 and anything else is rejected with HTTP 400.
 
 Sort options: `score_desc`, `score_asc`, `comments_desc`, `comments_asc`, `newest`, `oldest`

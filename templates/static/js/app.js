@@ -659,6 +659,7 @@
   function setView(view) {
     if (state.view === view) return;
     state.view = view;
+    if (view === "bookmarks") state.filters.subreddit = ""; // bookmarks reject sets, and a group scope would silently hide them all
     state.page = 1;
     syncViewUi();
     setActiveGroupButton();
