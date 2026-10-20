@@ -5,9 +5,10 @@
 {% block sidebar %}
   {% for item in sidebar %}
   <a
-    href="/{% if item.subs %}?subreddit={{ item.subs }}{% endif %}"
+    href="/{% if item.subs %}?group={{ item.key }}{% endif %}"
     class="group-btn{% if item.active %} active{% endif %}"
     data-subs="{{ item.subs }}"
+    data-key="{{ item.key }}"
     {% if item.active %}aria-current="page"{% endif %}
     ><span class="group-label">{{ item.label }}</span
     ><span class="group-count">{{ item.count }}</span></a
@@ -104,7 +105,7 @@
 <nav class="pagination" id="pagination" aria-label="Pagination">
     {% if total_pages > 1 %}
     {% if page > 1 %}
-    <a href="/?{{ query_params(page - 1, filters) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
+    <a href="/?{{ query_params(page - 1, filters, group_key) }}" class="js-page" data-page="{{ page - 1 }}"><i class="fa-solid fa-chevron-left"></i> Prev</a>
     {% else %}
     <span class="disabled"><i class="fa-solid fa-chevron-left"></i> Prev</span>
     {% endif %}
@@ -112,7 +113,7 @@
         {% if p == page %}
         <span class="current" aria-current="page">{{ p }}</span>
         {% elif p == 1 or p == total_pages or abs(p - page) <= 2 %}
-        <a href="/?{{ query_params(p, filters) }}" class="js-page" data-page="{{ p }}">{{ p }}</a>
+        <a href="/?{{ query_params(p, filters, group_key) }}" class="js-page" data-page="{{ p }}">{{ p }}</a>
         {% else %}
         {% if p == 2 or p == total_pages - 1 %}
         <span class="disabled">&hellip;</span>
@@ -120,7 +121,7 @@
         {% endif %}
     {% endfor %}
     {% if page < total_pages %}
-    <a href="/?{{ query_params(page + 1, filters) }}" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+    <a href="/?{{ query_params(page + 1, filters, group_key) }}" class="js-page" data-page="{{ page + 1 }}">Next <i class="fa-solid fa-chevron-right"></i></a>
     {% else %}
     <span class="disabled">Next <i class="fa-solid fa-chevron-right"></i></span>
     {% endif %}

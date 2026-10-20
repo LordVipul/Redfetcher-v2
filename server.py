@@ -112,8 +112,12 @@ def bad_request(message):
 templates.env.filters["datetimeformat"] = format_date
 
 
-def query_params(page, filters=None):
-    """Build a query string preserving current filters with a new page number."""
+def query_params(page, filters=None, group_key=None):
+    """Build a query string preserving current filters with a new page number.
+
+    When `group_key` is given, the display form emits `group=<key>` instead
+    of the subreddit set; other scopes keep set form.
+    """
     params = {}
     if filters:
         for k, v in filters.items():
@@ -121,7 +125,15 @@ def query_params(page, filters=None):
                 continue
             if k == "view" and v != "bookmarks":
                 continue
+            if k == "subreddit" and group_key:
+                continue
+            # Keep the emitted query in sync with the JS display form: default
+            # values are omitted so links degrade to the shortest URL.
+            if (k == "sort" and v == "oldest") or (k == "limit" and v == 50):
+                continue
             params[k] = str(v)
+    if group_key:
+        params["group"] = group_key
     params["page"] = str(page)
     return urlencode(params)
 
@@ -129,8 +141,8 @@ def query_params(page, filters=None):
 templates.env.globals["query_params"] = query_params
 
 
-def redirect_to_page(path, page, filters):
-    return RedirectResponse(url=f"{path}?{query_params(page, filters)}", status_code=302)
+def redirect_to_page(path, page, filters, group_key=None):
+    return RedirectResponse(url=f"{path}?{query_params(page, filters, group_key)}", status_code=302)
 
 
 templates.env.globals["abs"] = abs
@@ -141,7 +153,7 @@ templates.env.globals["abs"] = abs
 def split_subreddit_param(value):
     """Split the `subreddit` param into deduped names, original order kept.
 
-    One name stays as-is; comma-joined sets (the canonical group form) come
+    One name stays as-is; comma-joined sets (the canonical filter state) come
     back as a list. Empty parts (e.g. "git,,vim") are ignored — anything
     harmful still fails SUBREDDIT_RE validation in validate_filters.
     """
@@ -175,11 +187,21 @@ def match_group(names):
     return best[1], best[2], list(best[3])
 
 
+def resolve_group_param(group):
+    """Resolve a `?group=<key>` display URL against the current config.
+
+    Input form, not canonical state: an unknown or removed key resolves to
+    None and the request falls back to the subreddit param (All when absent)
+    — no alias tables, and a config change can never 400.
+    """
+    return config.GROUPS[group][1] if group in config.GROUPS else None
+
+
 def build_sidebar(subreddit_names, view):
     """Sidebar model: All + every group with post counts, plus the Bookmarks row.
 
-    Active state is derived from the current subreddit set: the matched group
-    is highlighted instead of any group key traveling in the URL.
+    Active state is derived from the current subreddit set; the matched group
+    is highlighted and links emit the `?group=<key>` display form.
     """
     stats = database.get_stats()
     counts = {s["subreddit"]: s["count"] for s in stats}
@@ -231,6 +253,7 @@ async def index(
     request: Request,
     view: str = Query("feed"),
     subreddit: str = Query(None),
+    group: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
     sort: str = Query("oldest"),
@@ -240,9 +263,6 @@ async def index(
     min_score: str = Query(None),
     min_comments: str = Query(None),
 ):
-    # `group` no longer exists in URLs. Deep links carrying it are ignored —
-    # the canonical filter state is the resolved subreddit set (`?subreddit=…`
-    # comma-joined), so removed/renamed groups can never 400.
     if view not in VIEWS:
         return bad_request(f"invalid view: {view!r} (allowed: feed, bookmarks)")
 
@@ -253,6 +273,13 @@ async def index(
     names = split_subreddit_param(subreddit) if subreddit else []
     if is_bookmarks and len(names) > 1:
         return bad_request("bookmarks support a single subreddit, not a set")
+
+    # `?group=<key>` is an input/display form resolved against the current
+    # config: unknown keys are ignored silently, and an explicit subreddit
+    # param wins when both are present.
+    group_names = resolve_group_param(group)
+    if group_names and not names:
+        names = list(group_names)
 
     # Bookmarks are always ordered oldest-first by when they were saved.
     effective_sort = "oldest" if is_bookmarks else sort
@@ -266,6 +293,11 @@ async def index(
 
     matched = match_group(names) if not is_bookmarks else None
     _, group_label, group_subs = matched if matched else (None, None, None)
+    # Display form splits exact group matches from subsets (a single sub stays
+    # set-form so the URL can't silently broaden its scope).
+    display_key = (
+        matched[0] if matched and len(names) == len(matched[2]) else None
+    )
     if is_bookmarks:
         results, total = await asyncio.to_thread(
             database.get_bookmarks,
@@ -284,7 +316,7 @@ async def index(
 
     total_pages = max(1, (total + limit - 1) // limit if limit > 0 else 1)
     if page > total_pages:
-        return redirect_to_page("/", total_pages, filters)
+        return redirect_to_page("/", total_pages, filters, display_key)
 
     sidebar = await asyncio.to_thread(build_sidebar, names, view)
     bookmark_count = await asyncio.to_thread(database.get_bookmark_count)
@@ -310,6 +342,7 @@ async def index(
             "bookmark_count": bookmark_count,
             "view": view,
             "group_label": group_label,
+            "group_key": display_key,
             "is_bookmarks": is_bookmarks,
             "total": total,
             "page": page,

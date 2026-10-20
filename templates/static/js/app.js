@@ -311,7 +311,15 @@
     var params = new URLSearchParams(window.location.search);
     var view = params.get("view") === "bookmarks" ? "bookmarks" : "feed";
     state.view = view;
-    state.filters.subreddit = params.get("subreddit") || "";
+    var groupKey = params.get("group");
+    if (!params.get("subreddit") && groupKey) {
+      // Display form: recover the set from the config-derived sidebar button.
+      // An unknown key finds no button and degrades to All, like the server.
+      var gbtn = document.querySelector('.sidebar .group-btn[data-key="' + groupKey + '"]');
+      state.filters.subreddit = (gbtn && gbtn.dataset.subs) || "";
+    } else {
+      state.filters.subreddit = params.get("subreddit") || "";
+    }
     state.filters.sort = params.get("sort") || "oldest";
     state.filters.start = params.get("start") || "";
     state.filters.end = params.get("end") || "";
@@ -346,8 +354,38 @@
     return isBookmarksView() ? "/api/bookmarks" : "/api/posts";
   }
 
+  // Address-bar form: a set that exactly matches a config group displays as
+  // `?group=<key>` (input form resolved from config server-side); unknown
+  // scopes stay in set form. Defaults are omitted, so All is just /.
+  function displayGroupKey() {
+    if (state.view !== "feed") return null;
+    if (!state.filters.subreddit) return null;
+    var best = activeSidebarMatch();
+    return best && best.score === 2 ? best.btn.dataset.key : null;
+  }
+
+  function displayQuery() {
+    var params = new URLSearchParams();
+    if (isBookmarksView()) params.set("view", "bookmarks");
+    var key = displayGroupKey();
+    if (key) params.set("group", key);
+    else if (state.filters.subreddit)
+      params.set("subreddit", state.filters.subreddit);
+    if (state.filters.sort && state.filters.sort !== "oldest")
+      params.set("sort", state.filters.sort);
+    if (state.filters.start) params.set("start", state.filters.start);
+    if (state.filters.end) params.set("end", state.filters.end);
+    if (state.filters.q) params.set("q", state.filters.q);
+    if (state.filters.limit && state.filters.limit !== 50)
+      params.set("limit", state.filters.limit);
+    setMinParams(params, state.filters);
+    if ((state.page || 1) > 1) params.set("page", state.page);
+    return params.toString();
+  }
+
   function syncUrl(historyMode) {
-    var url = window.location.pathname + "?" + buildQuery();
+    var query = displayQuery();
+    var url = window.location.pathname + (query ? "?" + query : "");
     if (historyMode === "push") history.pushState({ state: snapshot() }, "", url);
     else history.replaceState({ state: snapshot() }, "", url);
   }
@@ -816,7 +854,21 @@
 
     if (subredditEl)
       subredditEl.addEventListener("change", function () {
-        state.filters.subreddit = subredditEl.value;
+        // Choosing the placeholder while it reads "All in <group>" restores
+        // that group's set (what the label promises), not the whole feed.
+        if (!subredditEl.value && /^All in /.test(subredditEl.dataset.allLabel || "")) {
+          var want = subredditEl.dataset.allLabel.replace(/^All in /, "");
+          var gbtn = Array.prototype.find.call(
+            document.querySelectorAll('.sidebar .group-btn[data-subs]'),
+            function (b) {
+              var lb = b.querySelector(".group-label");
+              return lb && lb.textContent.trim() === want && b.dataset.subs;
+            }
+          );
+          state.filters.subreddit = (gbtn && gbtn.dataset.subs) || "";
+        } else {
+          state.filters.subreddit = subredditEl.value;
+        }
         state.page = 1;
         capturePaginationFocus();
         fetchFeed(1, "replace");
@@ -1057,8 +1109,9 @@
   stateFromUrl();
   syncViewUi();
   setActiveGroupButton();
-  // Server already rendered the first page; only rewrite the URL to the
-  // canonical form so shareable links match the API contract (stale ?group=
-  // keys are dropped here).
+  // Server already rendered the first page; rewrite the URL once to the
+  // display form so the address bar matches the flow: /, ?group=<key> for an
+  // exact config match, ?subreddit=… otherwise (stale ?group= keys degrade
+  // to All and are rewritten away here).
   syncUrl("replace");
 })();

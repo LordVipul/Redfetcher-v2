@@ -104,7 +104,7 @@ The web UI provides:
 - **Bookmarks** with undo toast notifications; the sidebar count updates live
 - **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list
 - **Settings menu** (gear icon) — dashboard link, hide/show sidebar, text size, reduce motion. All preferences persist in `localStorage`
-- Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?subreddit=git,neovim&sort=score_desc`)
+- Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?group=tools&sort=score_desc`)
 - Keyboard shortcuts: `Ctrl+K` or `/` to focus search
 
 ### API Endpoints
@@ -124,24 +124,29 @@ Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:
 | Parameter      | Type   | Default  | Description                  |
 | -------------- | ------ | -------- | ---------------------------- |
 | `subreddit`    | string | all      | One or more comma-separated subreddit names (single name in the bookmarks view) — the canonical filter state |
+| `group`        | string | none     | `/` display form: a `config.GROUPS` key (`/?group=ai`) resolved to its subreddit set against the current config; API endpoints don't accept it |
 | `view`         | string | `feed`   | `feed` or `bookmarks` (`/` only) |
 | `start`        | date   | none     | Start date filter            |
 | `end`          | date   | none     | End date filter            |
 | `sort`         | string | `oldest` | Sort order (feed views only) |
 | `limit`        | int    | 50       | Max results                  |
 | `q`            | string | none     | Title search                 |
-| `page`         | int    | 1        | Page number                  |
+| `page`         | int    | 1        | Page number (omitted from the address bar on page 1) |
 | `min_score`    | int    | none     | Minimum score (`>=`)         |
 | `min_comments` | int    | none     | Minimum comment count (`>=`) |
 
-Groups are **UI shortcuts only**: no group key ever appears in a canonical URL. The sidebar
-translates a group into its subreddit set from the current `config.GROUPS` (e.g. the Tools
-group sends `/?subreddit=AutoHotkey,git,neovim,Rainmeter,vim,vscode,zsh`), and the active
-sidebar highlight plus the "All in <group>" dropdown label are derived by matching the
-current set against the current config (exact match, then smallest containing group;
-anything else shows as All). Legacy `?group=` links are simply ignored — removed, renamed,
-and merged keys can never 400. Subreddit names must still match `^[a-zA-Z0-9_]{2,21}$`
-and anything else is rejected with HTTP 400.
+The address bar keeps the short form: `/` for All, `/?group=<key>` when the
+current scope exactly matches a config group, and `/?subreddit=…` for everything
+else (custom sets and single-subreddit scopes, which can't be a group key).
+`group` is an **input/display form, not the state**: the server resolves the key
+against the current `config.GROUPS` on every request, so removed/renamed keys
+and legacy `?group=` links silently show All instead of 400-ing — no alias
+tables, and a key rename just means old pretty links fall back to All. The API
+endpoints stay set-canonical: `/api/posts` takes `subreddit` only. The "All in
+<group>" dropdown label, sidebar highlight, and scoped dropdown lists are all
+derived by matching the current set against the current config (exact match,
+then smallest containing group; anything else shows as All). Subreddit names
+must match `^[a-zA-Z0-9_]{2,21}$` and anything else is rejected with HTTP 400.
 
 Sort options: `score_desc`, `score_asc`, `comments_desc`, `comments_asc`, `newest`, `oldest`
 
@@ -290,9 +295,9 @@ The templates check if `post.url` already starts with `http` before prepending `
 
 ### Client-Side Features
 
-- **Group switching**: Sidebar buttons resolve to their subreddit set without a page reload; the subreddit dropdown rebuilds to the selected group's subreddits
+- **Group switching**: Sidebar buttons navigate to `/?group=<key>` without a page reload; the subreddit dropdown rebuilds to the selected group's subreddits
 - **Live filtering**: All filters (subreddit, sort, date range, search, min score, min comm, limit) work via `fetch()` without full page reloads
-- **URL state**: View, subreddit set, and filter state live in the URL query string — shareable links (e.g. `/?subreddit=LocalLLaMA,MachineLearning&sort=score_desc&q=linux`)
+- **URL state**: View, group key, subreddit set, and filter state live in the URL query string — shareable links (e.g. `/?group=ai&sort=score_desc&q=linux`)
 - **Pagination**: Page numbers, Prev/Next, and jump-to-page input, with focus restoration after navigation
 - **Bookmarks**: Toggle bookmarks with undo toast notifications; sidebar count updates live; bookmarks view removes unbookmarked rows in place
 - **Preferences**: Hide sidebar, text size, and reduce motion persist in `localStorage`
