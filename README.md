@@ -5,7 +5,7 @@ A local web application that archives Reddit posts from any subreddit since its 
 ## Architecture
 
 - **`scraper.py`** — Standalone Python script. Fetches posts from Arctic Shift and stores them in SQLite. Run independently: `python scraper.py` or `python scraper.py <subreddit>`.
-- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page, group-driven post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks.
+- **`server.py`** — Standalone FastAPI web app. Reads from the SQLite database and serves a single-page post browser at `http://localhost:8000`. Includes bookmarks and a dashboard. Never scrapes; reads posts, writes only bookmarks.
 - **`config.py`** — `GROUPS` (key → short label + subreddits; the sidebar sorts groups by name) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings.
 - **`database.py`** — SQLite init, batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, and full bookmarks CRUD.
 - **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
@@ -47,7 +47,7 @@ The first run performs a full backfill from the subreddit's earliest available d
 python server.py
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in your browser. The sidebar lists **All** plus every configured group; the main section shows that group's posts with the full filter bar (subreddit scoped to the group, sort, limit, min score/comments, dates, title search). **Bookmarks** sits at the bottom of the sidebar and swaps the main section to saved posts. The gear icon opens settings (dashboard link, hide sidebar, text size, reduce motion). `/dashboard` shows archive statistics.
+Open [http://localhost:8000](http://localhost:8000) in your browser. The sidebar lists **All** plus every configured group; the main section shows the selected group's posts with the full filter bar (subreddit scoped to the group, sort, limit, min score/comments, dates, title search). **Bookmarks** sits at the bottom of the sidebar and swaps the main section to saved posts. The gear icon opens settings (dashboard link, hide sidebar, text size, reduce motion). `/dashboard` shows archive statistics.
 
 ### 4. Browse the database (optional)
 
@@ -92,9 +92,9 @@ python server.py                   # Starts at http://127.0.0.1:8000
 
 The web UI provides:
 
-- **Sidebar** with **All** plus every group from `config.GROUPS` (with live post counts); clicking a group loads only its subreddits' posts. **Bookmarks** at the bottom of the sidebar swaps the main section to saved posts
+- **Sidebar** with **All** plus every group from `config.GROUPS` (with live post counts); clicking a group resolves to that group's subreddit set and loads only its posts. **Bookmarks** at the bottom of the sidebar swaps the main section to saved posts
 - **Filter bar** at the top of the main section with:
-    - Subreddit dropdown (scoped to the active group; shows "All in <group>")
+    - Subreddit dropdown (scoped to the selected group when the current subreddit set belongs to one; shows "All in <group>")
     - Sort by score, comments, newest, oldest (hidden in the bookmarks view — bookmarks are always oldest-added first)
     - Title keyword search
     - Minimum score and minimum comment count thresholds (independent, digits-only inputs)
@@ -104,15 +104,15 @@ The web UI provides:
 - **Bookmarks** with undo toast notifications; the sidebar count updates live
 - **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list
 - **Settings menu** (gear icon) — dashboard link, hide/show sidebar, text size, reduce motion. All preferences persist in `localStorage`
-- Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?group=ai&sort=score_desc`)
+- Dark theme with red-orange accent (`#E85D3A`), responsive design, client-side live filtering, pagination with jump-to-page, and URL state preservation (shareable links, e.g. `/?subreddit=git,neovim&sort=score_desc`)
 - Keyboard shortcuts: `Ctrl+K` or `/` to focus search
 
 ### API Endpoints
 
 | Endpoint                      | Description                             |
 | ----------------------------- | --------------------------------------- |
-| `GET /`                       | Main app: group feed or bookmarks view (HTML) |
-| `GET /api/posts`              | Filtered post listing (JSON, supports `group`) |
+| `GET /`                       | Main app: subreddit feed or bookmarks view (HTML) |
+| `GET /api/posts`              | Filtered post listing (JSON, supports `subreddit` sets) |
 | `GET /stats`                  | Post counts per subreddit (JSON)        |
 | `GET /api/bookmarks`          | Bookmarked posts listing (JSON)         |
 | `GET /dashboard`              | Dashboard page (HTML)                   |
@@ -123,17 +123,25 @@ Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:
 
 | Parameter      | Type   | Default  | Description                  |
 | -------------- | ------ | -------- | ---------------------------- |
-| `group`        | string | `all`    | Group key from `config.GROUPS` (feed views only) |
+| `subreddit`    | string | all      | One or more comma-separated subreddit names (single name in the bookmarks view) — the canonical filter state |
 | `view`         | string | `feed`   | `feed` or `bookmarks` (`/` only) |
-| `subreddit`    | string | all      | Filter by subreddit (within the group) |
 | `start`        | date   | none     | Start date filter            |
-| `end`          | date   | none     | End date filter              |
+| `end`          | date   | none     | End date filter            |
 | `sort`         | string | `oldest` | Sort order (feed views only) |
 | `limit`        | int    | 50       | Max results                  |
 | `q`            | string | none     | Title search                 |
 | `page`         | int    | 1        | Page number                  |
 | `min_score`    | int    | none     | Minimum score (`>=`)         |
 | `min_comments` | int    | none     | Minimum comment count (`>=`) |
+
+Groups are **UI shortcuts only**: no group key ever appears in a canonical URL. The sidebar
+translates a group into its subreddit set from the current `config.GROUPS` (e.g. the Tools
+group sends `/?subreddit=AutoHotkey,git,neovim,Rainmeter,vim,vscode,zsh`), and the active
+sidebar highlight plus the "All in <group>" dropdown label are derived by matching the
+current set against the current config (exact match, then smallest containing group;
+anything else shows as All). Legacy `?group=` links are simply ignored — removed, renamed,
+and merged keys can never 400. Subreddit names must still match `^[a-zA-Z0-9_]{3,21}$`
+and anything else is rejected with HTTP 400.
 
 Sort options: `score_desc`, `score_asc`, `comments_desc`, `comments_asc`, `newest`, `oldest`
 
@@ -159,7 +167,7 @@ GROUPS = {
     ]),
     "web": ("Web dev", ["css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev"]),
     "design": ("Design", ["accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design"]),
-    ...                             # 18 groups total (sidebar sorts them by name)
+    ...                             # 15 groups total (sidebar sorts them by name)
 }
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
 REQUEST_DELAY = 1.0           # Minimum delay after each API request
@@ -176,7 +184,8 @@ RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 
 Subreddits within a group are alphabetical; the web sidebar sorts groups by name (with `All`
 first and Bookmarks last). `SUBREDDITS` is derived from `GROUPS`, so the scraper needs no changes
-when groups change.
+when groups change. Because group keys never appear in URLs — the canonical filter is the
+resolved subreddit set — adding, removing, renaming, or merging groups never breaks links.
 
 The scraper accepts **any** subreddit as a command-line argument, not just the ones in the groups.
 
@@ -281,9 +290,9 @@ The templates check if `post.url` already starts with `http` before prepending `
 
 ### Client-Side Features
 
-- **Group switching**: Sidebar buttons swap the active group without a page reload; the subreddit dropdown rebuilds to that group's subreddits
+- **Group switching**: Sidebar buttons resolve to their subreddit set without a page reload; the subreddit dropdown rebuilds to the selected group's subreddits
 - **Live filtering**: All filters (subreddit, sort, date range, search, min score, min comm, limit) work via `fetch()` without full page reloads
-- **URL state**: Group, view, and filter state live in the URL query string — shareable links (e.g. `/?group=ai&sort=score_desc&q=linux`)
+- **URL state**: View, subreddit set, and filter state live in the URL query string — shareable links (e.g. `/?subreddit=LocalLLaMA,MachineLearning&sort=score_desc&q=linux`)
 - **Pagination**: Page numbers, Prev/Next, and jump-to-page input, with focus restoration after navigation
 - **Bookmarks**: Toggle bookmarks with undo toast notifications; sidebar count updates live; bookmarks view removes unbookmarked rows in place
 - **Preferences**: Hide sidebar, text size, and reduce motion persist in `localStorage`

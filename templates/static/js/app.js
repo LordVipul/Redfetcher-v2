@@ -275,9 +275,11 @@
   }
 
   // ── State ──────────────────────────────────────
+  // The group is a UI shortcut only: its canonical footprint is the resolved
+  // subreddit set in `subreddit` (comma-joined), so no group key ever
+  // travels in URLs and stale group links degrade to the All view.
   var state = {
     view: "feed",
-    group: "all",
     filters: {
       subreddit: "",
       sort: "oldest",
@@ -291,12 +293,24 @@
     page: 1,
   };
 
+  function parseSubSet(str) {
+    return (str || "").split(",").filter(Boolean);
+  }
+
+  // `names` is contained in `subs` (exact match or subset of the group).
+  function withinSet(names, subs) {
+    return (
+      names.length > 0 &&
+      names.every(function (n) {
+        return subs.indexOf(n) !== -1;
+      })
+    );
+  }
+
   function stateFromUrl() {
     var params = new URLSearchParams(window.location.search);
     var view = params.get("view") === "bookmarks" ? "bookmarks" : "feed";
-    var group = params.get("group") || "all";
     state.view = view;
-    state.group = group;
     state.filters.subreddit = params.get("subreddit") || "";
     state.filters.sort = params.get("sort") || "oldest";
     state.filters.start = params.get("start") || "";
@@ -314,8 +328,6 @@
 
   function buildQuery(page) {
     var params = new URLSearchParams();
-    if (!isBookmarksView() && state.group && state.group !== "all")
-      params.set("group", state.group);
     if (isBookmarksView()) params.set("view", "bookmarks");
     if (state.filters.subreddit) params.set("subreddit", state.filters.subreddit);
     if (state.filters.sort && state.filters.sort !== "oldest")
@@ -341,7 +353,7 @@
   }
 
   function snapshot() {
-    return JSON.parse(JSON.stringify({ view: state.view, group: state.group, filters: state.filters, page: state.page }));
+    return JSON.parse(JSON.stringify({ view: state.view, filters: state.filters, page: state.page }));
   }
 
   // ── Feed rendering ─────────────────────────────
@@ -589,9 +601,32 @@
   }
 
   // ── Sidebar ─────────────────────────────────────
-  function setActiveGroupButton(key) {
+  // Active group is derived from the current subreddit set against the
+  // config-derived data-subs of the buttons (server render and JS agree):
+  // exact match or subset of exactly one group; empty set → All.
+  function activeSidebarMatch() {
+    if (state.view !== "feed") return null;
+    var names = parseSubSet(state.filters.subreddit);
+    var best = null;
+    if (!names.length) {
+      var allBtn = document.querySelector('.sidebar .group-btn[data-subs=""]');
+      return allBtn ? { btn: allBtn, label: null } : null;
+    }
+    document.querySelectorAll(".sidebar .group-btn[data-subs]").forEach(function (btn) {
+      var subs = parseSubSet(btn.dataset.subs);
+      if (!withinSet(names, subs)) return;
+      var score = subs.length === names.length ? 2 : 1;
+      if (!best || score > best.score || (score === best.score && subs.length < best.size)) {
+        best = { btn: btn, score: score, size: subs.length };
+      }
+    });
+    return best;
+  }
+
+  function setActiveGroupButton() {
+    var best = activeSidebarMatch();
     document.querySelectorAll(".sidebar .group-btn").forEach(function (btn) {
-      var isActive = btn.dataset.group === key && state.view === "feed";
+      var isActive = best !== null && best.btn === btn;
       btn.classList.toggle("active", isActive);
       if (isActive) btn.setAttribute("aria-current", "page");
       else btn.removeAttribute("aria-current");
@@ -600,14 +635,24 @@
     if (bmBtn) bmBtn.classList.toggle("active", state.view === "bookmarks");
   }
 
-  function setGroup(key) {
-    if (state.group === key && state.view === "feed") return;
-    state.group = key;
+  // The dropdown's "All in <group>" entry, derived the same way as the
+  // active sidebar state, so a group switch never leaves a stale label.
+  function allOptionLabel() {
+    var best = activeSidebarMatch();
+    if (best && best.size) {
+      var lab = best.btn.querySelector(".group-label");
+      if (lab) return "All in " + lab.textContent.trim();
+    }
+    return "All";
+  }
+
+  function setGroup(subs) {
+    if (state.view === "feed" && state.filters.subreddit === subs) return;
+    state.filters.subreddit = subs; // the group's full subreddit set
     state.view = "feed";
-    state.filters.subreddit = ""; // a new group invalidates a per-sub filter
-    state.page = 1;
+    state.page = 1; // a new group invalidates paging and a per-sub filter
     syncViewUi();
-    setActiveGroupButton(key);
+    setActiveGroupButton();
     fetchFeed(1, "push");
   }
 
@@ -616,7 +661,7 @@
     state.view = view;
     state.page = 1;
     syncViewUi();
-    setActiveGroupButton(state.group);
+    setActiveGroupButton();
     fetchFeed(1, "push");
   }
 
@@ -624,14 +669,14 @@
     document.body.dataset.view = state.view;
     var sortField = document.getElementById("sort-field");
     if (sortField) sortField.hidden = state.view === "bookmarks";
-    setActiveGroupButton(state.group);
+    setActiveGroupButton();
   }
 
   document.addEventListener("click", function (e) {
-    var groupBtn = e.target.closest(".sidebar .group-btn[data-group]");
+    var groupBtn = e.target.closest(".sidebar .group-btn[data-subs]");
     if (groupBtn) {
       e.preventDefault();
-      setGroup(groupBtn.dataset.group);
+      setGroup(groupBtn.dataset.subs || "");
       return;
     }
     var bmBtn = e.target.closest(".bookmarks-btn");
@@ -655,10 +700,14 @@
   function rebuildSubredditSelect(subs) {
     var el = document.getElementById("filter-subreddit");
     if (!el) return;
-    var current = state.filters.subreddit;
-    var keep = current && subs.indexOf(current) !== -1 ? current : "";
-    state.filters.subreddit = keep;
-    var allLabel = el.dataset.allLabel || "All";
+    // A multi-sub set cannot be a dropdown selection: keep the state as-is
+    // and show the derived "All in <group>" option unchecked. Only a single
+    // mis-scoped name is dropped here.
+    var names = parseSubSet(state.filters.subreddit);
+    var keep = names.length === 1 && subs.indexOf(names[0]) !== -1 ? names[0] : "";
+    if (names.length === 1 && keep === "") state.filters.subreddit = "";
+    var allLabel = allOptionLabel();
+    el.dataset.allLabel = allLabel;
     var html = '<option value="">' + escapeHtml(allLabel) + "</option>";
     html += subs
       .map(function (s) {
@@ -884,16 +933,15 @@
     window.addEventListener("popstate", function (e) {
       if (e.state && e.state.state) {
         state.view = e.state.state.view || "feed";
-        state.group = e.state.state.group || "all";
         state.filters = Object.assign(state.filters, e.state.state.filters || {});
         state.page = e.state.state.page || 1;
         syncControlsFromState(state.filters, state.view);
-        setActiveGroupButton(state.group);
+        setActiveGroupButton();
         fetchFeed(state.page, "none");
       } else {
         stateFromUrl();
         syncControlsFromState(state.filters, state.view);
-        setActiveGroupButton(state.group);
+        setActiveGroupButton();
         fetchFeed(state.page, "none");
       }
     });
@@ -1007,8 +1055,9 @@
   // ── Boot ────────────────────────────────────────
   stateFromUrl();
   syncViewUi();
-  setActiveGroupButton(state.group);
+  setActiveGroupButton();
   // Server already rendered the first page; only rewrite the URL to the
-  // canonical form so shareable links match the API contract.
+  // canonical form so shareable links match the API contract (stale ?group=
+  // keys are dropped here).
   syncUrl("replace");
 })();

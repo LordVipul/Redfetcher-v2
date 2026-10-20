@@ -13,14 +13,11 @@ GROUPS = {
     "design": ("Design", [
         "accessibility", "design_critiques", "DesignPorn", "graphic_design", "Typography", "UI_Design", "userexperience", "web_design",
     ]),
-    "programming": ("Programming", [
-        "algorithms", "AskProgramming", "codegolf", "coding", "DailyProgrammer", "learnprogramming", "leetcode", "programming",
-    ]),
     "cs": ("CS", [
-        "compsci", "computerscience", "osdev",
+        "algorithms", "AskProgramming", "codegolf", "coding", "compsci", "computerscience", "DailyProgrammer", "learnprogramming", "leetcode", "osdev", "programming",
     ]),
     "tools": ("Tools", [
-        "git", "neovim", "vim", "vscode", "zsh",
+        "AutoHotkey", "git", "neovim", "Rainmeter", "vim", "vscode", "zsh",
     ]),
     "databases": ("Databases", [
         "Database", "SQL", "sqlite",
@@ -28,20 +25,14 @@ GROUPS = {
     "selfhosted": ("Self-host", [
         "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
     ]),
-    "ricing": ("Ricing", [
-        "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn",
-    ]),
-    "windows": ("Windows", [
-        "AutoHotkey", "Rainmeter",
-    ]),
-    "theming": ("Theming", [
-        "FirefoxCSS", "wallpaperengine", "wallpapers",
+    "customisation": ("Customisation", [
+        "FirefoxCSS", "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn", "wallpaperengine", "wallpapers",
     ]),
     "android": ("Android", [
-        "Android", "androidapps", "androidthemes", "homescreen", "kustom",
+        "Android", "androidapps", "androidthemes", "fossdroid", "homescreen", "kustom", "termux",
     ]),
-    "android-foss": ("Android FOSS", [
-        "fossdroid", "termux",
+    "games": ("Games", [
+        "AndroidGaming", "gaming", "RimWorld", "Stellaris",
     ]),
     "setups": ("Setups", [
         "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",

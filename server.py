@@ -82,8 +82,10 @@ def parse_min_filter(value):
 
 def validate_filters(subreddit=None, start=None, end=None, sort=None, q=None, allowed_sorts=None, min_score=None, min_comments=None):
     """Validate query parameters. Returns an error message, or None if valid."""
-    if subreddit and not SUBREDDIT_RE.match(subreddit):
-        return f"invalid subreddit name: {subreddit!r}"
+    if subreddit:
+        for name in split_subreddit_param(subreddit):
+            if not SUBREDDIT_RE.match(name):
+                return f"invalid subreddit name: {name!r}"
     if sort is not None and allowed_sorts is not None and sort not in allowed_sorts:
         return f"invalid sort: {sort!r} (allowed: {', '.join(sorted(allowed_sorts))})"
     if q not in (None, "") and not (Q_MIN_LEN <= len(q) <= Q_MAX_LEN):
@@ -117,8 +119,6 @@ def query_params(page, filters=None):
         for k, v in filters.items():
             if v is None or v == "":
                 continue
-            if k == "group" and v == "all":
-                continue
             if k == "view" and v != "bookmarks":
                 continue
             params[k] = str(v)
@@ -138,31 +138,66 @@ templates.env.globals["abs"] = abs
 
 # ── Groups ───────────────────────────────────────────────────
 
-def resolve_group(key):
-    """Return (label, subreddits or None) for a group key; None if unknown.
+def split_subreddit_param(value):
+    """Split the `subreddit` param into deduped names, original order kept.
 
-    The special key "all" means no subreddit restriction.
+    One name stays as-is; comma-joined sets (the canonical group form) come
+    back as a list. Empty parts (e.g. "git,,vim") are ignored — anything
+    harmful still fails SUBREDDIT_RE validation in validate_filters.
     """
-    if key in (None, "", "all"):
-        return "All", None
-    if key not in config.GROUPS:
+    names = []
+    for part in value.split(","):
+        name = part.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def match_group(names):
+    """Derive (key, label, subreddits) from a subreddit set against GROUPS.
+
+    Purely derived state — no alias/history tables: exact match wins, else the
+    smallest group containing the set (so a single subreddit scopes its group).
+    Returns None when the set is empty or outside every group.
+    """
+    if not names:
         return None
-    label, subs = config.GROUPS[key]
-    return label, list(subs)
+    got = set(names)
+    best = None
+    for key, (label, subs) in config.GROUPS.items():
+        full = set(subs)
+        if got <= full:
+            score = (2 if got == full else 1, -len(full))
+            if best is None or score > best[0]:
+                best = (score, key, label, subs)
+    if best is None:
+        return None
+    return best[1], best[2], list(best[3])
 
 
-def build_sidebar(active_key, view):
-    """Sidebar model: All + every group with post counts, plus the Bookmarks row."""
+def build_sidebar(subreddit_names, view):
+    """Sidebar model: All + every group with post counts, plus the Bookmarks row.
+
+    Active state is derived from the current subreddit set: the matched group
+    is highlighted instead of any group key traveling in the URL.
+    """
     stats = database.get_stats()
     counts = {s["subreddit"]: s["count"] for s in stats}
     total = sum(counts.values())
-    items = [{"key": "all", "label": "All", "count": total, "active": view == "feed" and active_key == "all"}]
+    matched = match_group(subreddit_names) if view == "feed" else None
+    items = [
+        {
+            "key": "all", "label": "All", "subs": "", "count": total,
+            "active": view == "feed" and not subreddit_names,
+        }
+    ]
     groups = [
         {
             "key": key,
             "label": label,
+            "subs": ",".join(subs),
             "count": sum(counts.get(s, 0) for s in subs),
-            "active": view == "feed" and active_key == key,
+            "active": matched is not None and matched[0] == key,
         }
         for key, (label, subs) in config.GROUPS.items()
     ]
@@ -194,7 +229,6 @@ async def build_template_context(request: Request, extra=None, post_ids=(), book
 @app.get("/", response_class=HTMLResponse)
 async def index(
     request: Request,
-    group: str = Query("all"),
     view: str = Query("feed"),
     subreddit: str = Query(None),
     start: str = Query(None),
@@ -206,39 +240,43 @@ async def index(
     min_score: str = Query(None),
     min_comments: str = Query(None),
 ):
+    # `group` no longer exists in URLs. Deep links carrying it are ignored —
+    # the canonical filter state is the resolved subreddit set (`?subreddit=…`
+    # comma-joined), so removed/renamed groups can never 400.
     if view not in VIEWS:
         return bad_request(f"invalid view: {view!r} (allowed: feed, bookmarks)")
-    resolved = resolve_group(group)
-    if resolved is None:
-        return bad_request(f"invalid group: {group!r}")
 
     is_bookmarks = view == "bookmarks"
     allowed_sorts = BOOKMARK_SORTS if is_bookmarks else POST_SORTS
     if err := validate_filters(subreddit, start, end, sort, q, allowed_sorts, min_score, min_comments):
         return bad_request(err)
+    names = split_subreddit_param(subreddit) if subreddit else []
+    if is_bookmarks and len(names) > 1:
+        return bad_request("bookmarks support a single subreddit, not a set")
 
     # Bookmarks are always ordered oldest-first by when they were saved.
     effective_sort = "oldest" if is_bookmarks else sort
     min_score, min_comments = parse_min_filter(min_score), parse_min_filter(min_comments)
     filters = {
-        "group": group, "view": view if is_bookmarks else "feed",
-        "subreddit": subreddit, "start": start, "end": end,
+        "view": view if is_bookmarks else "feed",
+        "subreddit": ",".join(names) or None, "start": start, "end": end,
         "sort": effective_sort, "limit": limit, "q": q,
         "min_score": min_score, "min_comments": min_comments,
     }
 
-    group_label, group_subs = resolved
+    matched = match_group(names) if not is_bookmarks else None
+    _, group_label, group_subs = matched if matched else (None, None, None)
     if is_bookmarks:
         results, total = await asyncio.to_thread(
             database.get_bookmarks,
             limit=limit, offset=(page - 1) * limit, sort=effective_sort,
-            subreddit=subreddit, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
+            subreddit=names[0] if names else None, start_date=to_timestamp(start), end_date=to_end_timestamp(end), q=q,
             min_score=min_score, min_comments=min_comments,
         )
     else:
         results, total = await asyncio.to_thread(
             database.get_posts,
-            subreddit=subreddit, subreddits=group_subs,
+            subreddits=names,
             start_date=to_timestamp(start), end_date=to_end_timestamp(end),
             sort=effective_sort, limit=limit, q=q, page=page,
             min_score=min_score, min_comments=min_comments,
@@ -248,17 +286,17 @@ async def index(
     if page > total_pages:
         return redirect_to_page("/", total_pages, filters)
 
-    sidebar = await asyncio.to_thread(build_sidebar, group, view)
+    sidebar = await asyncio.to_thread(build_sidebar, names, view)
     bookmark_count = await asyncio.to_thread(database.get_bookmark_count)
     if is_bookmarks:
         all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+    elif group_subs is not None:
+        all_subreddits = group_subs
     else:
-        all_subreddits = group_subs if group_subs is not None else await asyncio.to_thread(
-            database.get_all_subreddits
-        )
+        all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
 
     log.info(
-        f"GET / — view={view}, group={group}, sort={effective_sort}, limit={limit}, "
+        f"GET / — view={view}, subs={len(names)}, sort={effective_sort}, limit={limit}, "
         f"page={page}, q={'yes' if q else 'no'}, results={len(results)}, total={total}"
     )
     return templates.TemplateResponse(
@@ -271,7 +309,6 @@ async def index(
             "sidebar": sidebar,
             "bookmark_count": bookmark_count,
             "view": view,
-            "group": group,
             "group_label": group_label,
             "is_bookmarks": is_bookmarks,
             "total": total,
@@ -283,7 +320,6 @@ async def index(
 
 @app.get("/api/posts")
 async def api_posts(
-    group: str = Query("all"),
     subreddit: str = Query(None),
     start: str = Query(None),
     end: str = Query(None),
@@ -296,15 +332,14 @@ async def api_posts(
 ):
     if err := validate_filters(subreddit, start, end, sort, q, POST_SORTS, min_score, min_comments):
         return bad_request(err)
-    resolved = resolve_group(group)
-    if resolved is None:
-        return bad_request(f"invalid group: {group!r}")
-    _, group_subs = resolved
+    names = split_subreddit_param(subreddit) if subreddit else []
+    matched = match_group(names)
+    _, _, group_subs = matched if matched else (None, None, None)
     min_score = parse_min_filter(min_score)
     min_comments = parse_min_filter(min_comments)
     results, total = await asyncio.to_thread(
         database.get_posts,
-        subreddit=subreddit, subreddits=group_subs,
+        subreddits=names,
         start_date=to_timestamp(start), end_date=to_end_timestamp(end),
         sort=sort, limit=limit, q=q, page=page,
         min_score=min_score, min_comments=min_comments,
@@ -315,12 +350,12 @@ async def api_posts(
         if total > 0:
             results, total = await asyncio.to_thread(
                 database.get_posts,
-                subreddit=subreddit, subreddits=group_subs,
+                subreddits=names,
                 start_date=to_timestamp(start), end_date=to_end_timestamp(end),
                 sort=sort, limit=limit, q=q, page=page,
                 min_score=min_score, min_comments=min_comments,
             )
-    log.info(f"GET /api/posts — group={group}, {len(results)} posts returned")
+    log.info(f"GET /api/posts — subs={len(names)}, {len(results)} posts returned")
     bookmarked_ids = await asyncio.to_thread(
         database.get_bookmark_ids_for, [p["id"] for p in results]
     )
@@ -414,6 +449,7 @@ async def dashboard(request: Request):
         {
             "key": key,
             "label": label,
+            "subs": ",".join(subs),
             "count": sum(counts.get(s, 0) for s in subs),
             "sub_count": len(subs),
         }

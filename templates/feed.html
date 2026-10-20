@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}{% if is_bookmarks %}Bookmarks{% else %}{{ group_label }}{% endif %} · RedFetcher{% endblock %}
+{% block title %}{% if is_bookmarks %}Bookmarks{% else %}{{ group_label or "All" }}{% endif %} · RedFetcher{% endblock %}
 {% block body_view %}{{ view }}{% endblock %}
 
 {% block sidebar %}
   {% for item in sidebar %}
   <a
-    href="/?group={{ item.key }}"
+    href="/{% if item.subs %}?subreddit={{ item.subs }}{% endif %}"
     class="group-btn{% if item.active %} active{% endif %}"
-    data-group="{{ item.key }}"
+    data-subs="{{ item.subs }}"
     {% if item.active %}aria-current="page"{% endif %}
     ><span class="group-label">{{ item.label }}</span
     ><span class="group-count">{{ item.count }}</span></a
@@ -28,8 +28,8 @@
     <form id="filter-form" action="/" method="get" role="search" aria-label="Filter posts" novalidate>
         <div class="field">
             <label for="filter-subreddit">Subreddit</label>
-            <select name="subreddit" id="filter-subreddit" data-all-label="{% if is_bookmarks %}All{% elif filters.group == 'all' %}All{% else %}All in {{ group_label }}{% endif %}">
-                <option value="">{% if is_bookmarks %}All{% elif filters.group == "all" %}All{% else %}All in {{ group_label }}{% endif %}</option>
+            <select name="subreddit" id="filter-subreddit" data-all-label="{% if is_bookmarks %}All{% elif group_label %}All in {{ group_label }}{% else %}All{% endif %}">
+                <option value="">{% if is_bookmarks %}All{% elif group_label %}All in {{ group_label }}{% else %}All{% endif %}</option>
                 {% for s in all_subreddits %}
                 <option value="{{ s }}" {% if filters.subreddit == s %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
