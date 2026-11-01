@@ -259,12 +259,85 @@ class LoggingArcticShiftClient(ArcticShiftClient):
 
         raise ScrapeError(f"Unexpected API request failure: {url}")
 
+    def check_health(self, subreddit):
+        url = f"{self.base_url}/api/posts/search"
+        params = {"subreddit": subreddit, "limit": 1, "fields": "id"}
+        max_attempts = max(1, self.max_retries)
+        detail = "no response"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self.session.get(url, params=self._clean(params), timeout=self.timeout)
+            except requests.RequestException as exc:
+                detail = f"{type(exc).__name__}: {exc}"
+                if attempt >= max_attempts:
+                    log.error(
+                        "Arctic Shift health check failed (attempt %d/%d) error=%s",
+                        attempt,
+                        max_attempts,
+                        detail,
+                    )
+                    break
+                delay = self._retry_delay(attempt)
+                log.warning(
+                    "Arctic Shift health check failed (attempt %d/%d) error=%s; "
+                    "retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    detail,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+
+            status = response.status_code
+            reason = response.reason or ""
+            if 200 <= status < 300:
+                try:
+                    response.json()
+                except ValueError:
+                    detail = f"invalid JSON status={status} body={self._body_summary(response)}"
+                else:
+                    return True, f"status={status}"
+            elif status in (422, 429):
+                return True, f"status={status} reachable"
+            else:
+                detail = (
+                    f"status={status} reason={reason} body={self._body_summary(response)}"
+                )
+
+            if attempt >= max_attempts:
+                log.error(
+                    "Arctic Shift health check failed (attempt %d/%d) %s",
+                    attempt,
+                    max_attempts,
+                    detail,
+                )
+                break
+            delay = self._retry_delay(attempt)
+            log.warning(
+                "Arctic Shift health check failed (attempt %d/%d) %s; retrying in %.1fs",
+                attempt,
+                max_attempts,
+                detail,
+                delay,
+            )
+            time.sleep(delay)
+
+        return False, detail
+
+
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+class ISTFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        return datetime.fromtimestamp(record.created, IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(ISTFormatter("%(asctime)s %(levelname)-8s %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 log = logging.getLogger("redfetcher")
 
 
@@ -276,6 +349,12 @@ def _utc_datetime(value):
 
 def _format_api_datetime(value):
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _log_time(value):
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 def find_start_year(subreddit, client):
@@ -304,7 +383,7 @@ def get_scrape_start(subreddit, client):
         log.info(
             "[%s] Resuming from checkpoint %s with a %s-hour overlap",
             subreddit,
-            checkpoint_dt.isoformat(),
+            _log_time(checkpoint_dt),
             config.RESUME_OVERLAP_HOURS,
         )
         return resume_dt
@@ -321,8 +400,8 @@ def _request_posts(client, subreddit, start, end, limit, fields, sort, stats):
     log.debug(
         "[%s] Requesting %s to %s (sort=%s)",
         subreddit,
-        _format_api_datetime(query_start),
-        _format_api_datetime(query_end),
+        _log_time(query_start),
+        _log_time(query_end),
         sort,
     )
     data = client.search_posts(
@@ -369,14 +448,14 @@ def _fetch_window(
         if end - start <= minimum_window:
             raise QueryTimeoutError(
                 f"[{subreddit}] Query timeout at minimum window width: "
-                f"{_format_api_datetime(start)} to {_format_api_datetime(end)}: {exc}"
+                f"{_log_time(start)} to {_log_time(end)}: {exc}"
             ) from exc
         midpoint = start + (end - start) / 2
         log.warning(
             "[%s] Query timeout persisted; splitting window %s to %s",
             subreddit,
-            _format_api_datetime(start),
-            _format_api_datetime(end),
+            _log_time(start),
+            _log_time(end),
         )
         yield from _fetch_window(
             client,
@@ -403,8 +482,8 @@ def _fetch_window(
         return
     except Exception as exc:
         raise ScrapeError(
-            f"[{subreddit}] Request failed for {_format_api_datetime(start)} to "
-            f"{_format_api_datetime(end)}: {exc}"
+            f"[{subreddit}] Request failed for {_log_time(start)} to "
+            f"{_log_time(end)}: {exc}"
         ) from exc
 
     if len(posts) >= limit:
@@ -418,8 +497,8 @@ def _fetch_window(
                 "unique posts at the tie (asc=%d, desc=%d); any same-timestamp "
                 "overflow beyond that cannot be fetched and is skipped",
                 subreddit,
-                _format_api_datetime(start),
-                _format_api_datetime(end),
+                _log_time(start),
+                _log_time(end),
                 len(merged),
                 len(posts),
                 len(desc_posts),
@@ -435,8 +514,8 @@ def _fetch_window(
             "[%s] Saturated window (%d posts); splitting %s to %s",
             subreddit,
             len(posts),
-            _format_api_datetime(start),
-            _format_api_datetime(end),
+            _log_time(start),
+            _log_time(end),
         )
         yield from _fetch_window(
             client,
@@ -532,8 +611,8 @@ def scrape_subreddit(subreddit):
     log.info(
         "[%s] Scraping from %s to %s with a maximum of %d posts per request",
         subreddit,
-        _format_api_datetime(start),
-        _format_api_datetime(end),
+        _log_time(start),
+        _log_time(end),
         request_limit,
     )
 
@@ -542,7 +621,7 @@ def scrape_subreddit(subreddit):
 
     def checkpoint(window_end):
         database.advance_scrape_state(subreddit, window_end.timestamp())
-        log.debug("[%s] Checkpoint advanced to %s", subreddit, _format_api_datetime(window_end))
+        log.debug("[%s] Checkpoint advanced to %s", subreddit, _log_time(window_end))
 
     try:
         for posts in fetch_posts_batch(
@@ -580,9 +659,28 @@ def scrape_subreddit(subreddit):
     return count
 
 
+def ensure_api_health(subreddit):
+    client = LoggingArcticShiftClient(
+        timeout=config.CLIENT_TIMEOUT,
+        sleep_seconds=config.REQUEST_DELAY,
+        max_retries=config.MAX_ATTEMPTS,
+        backoff_factor=config.BACKOFF_FACTOR,
+    )
+    log.info("Checking Arctic Shift health via r/%s ...", subreddit)
+    ok, detail = client.check_health(subreddit)
+    if not ok:
+        log.error(
+            "Arctic Shift is unreachable (%s); aborting before scraping any subreddit",
+            detail,
+        )
+    return ok
+
+
 def scrape_all():
     total = 0
     failed = []
+    if not ensure_api_health(config.SUBREDDITS[0]):
+        return 1
     log.info(
         "Starting scrape for %d subreddits: %s",
         len(config.SUBREDDITS),
@@ -626,6 +724,8 @@ if __name__ == "__main__":
                     "Invalid subreddit name: %r (must be 2-21 chars: letters, digits, underscores)",
                     subreddit,
                 )
+                sys.exit(1)
+            if not ensure_api_health(subreddit):
                 sys.exit(1)
             scrape_subreddit(subreddit)
         else:

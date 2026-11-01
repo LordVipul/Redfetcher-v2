@@ -13,11 +13,17 @@ import database
 import maintenance
 
 # ── Logging ──────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+class ISTFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        return datetime.fromtimestamp(record.created, IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(ISTFormatter("%(asctime)s %(levelname)-8s %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 log = logging.getLogger("redfetcher")
 
 app = FastAPI(title="RedFetcher v2")
