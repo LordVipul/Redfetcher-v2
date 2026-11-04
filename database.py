@@ -1,8 +1,11 @@
+import logging
 import os
 import sqlite3
 import time
 
 import config
+
+log = logging.getLogger("redfetcher")
 
 
 def get_connection():
@@ -171,14 +174,50 @@ def _title_search_clause(alias, q):
     return f" AND {alias}title LIKE ? ESCAPE '\\'", f"%{escaped}%"
 
 
+def _valid_post_row(post, index):
+    """Return a DB row tuple for a valid post, or None after logging why not."""
+    if not isinstance(post, dict):
+        log.warning("Skipping malformed post at batch index %d: %r", index, post)
+        return None
+    post_id = post.get("id")
+    url = post.get("url")
+    subreddit = post.get("subreddit")
+    if not isinstance(post_id, str) or not post_id.strip():
+        log.warning("Skipping post at batch index %d: invalid id %r", index, post_id)
+        return None
+    if not isinstance(url, str) or not url.strip():
+        log.warning("Skipping post %r: invalid url %r", post_id, url)
+        return None
+    if not isinstance(subreddit, str) or not subreddit.strip():
+        log.warning("Skipping post %r: invalid subreddit %r", post_id, subreddit)
+        return None
+    return (
+        post_id.strip(),
+        url.strip(),
+        post.get("title"),
+        post.get("score"),
+        post.get("num_comments"),
+        post.get("created_utc"),
+        subreddit.strip(),
+    )
+
+
 def insert_posts(posts):
+    """Insert valid posts, skipping malformed ones; return the number inserted."""
     if not posts:
+        return 0
+    rows = []
+    for index, post in enumerate(posts):
+        row = _valid_post_row(post, index)
+        if row is not None:
+            rows.append(row)
+    if not rows:
         return 0
     conn = get_connection()
     try:
         cursor = conn.executemany(
             "INSERT OR IGNORE INTO posts (id, url, title, score, num_comments, created_utc, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(p["id"], p["url"], p["title"], p["score"], p["num_comments"], p["created_utc"], p["subreddit"]) for p in posts],
+            rows,
         )
         conn.commit()
         return cursor.rowcount
