@@ -38,8 +38,18 @@ def migrate_bookmarks_foreign_key(conn):
         "SELECT id, post_id, created_at FROM bookmarks_legacy"
     )
     conn.execute("DROP TABLE bookmarks_legacy")
-    conn.execute("CREATE INDEX idx_bookmarks_post_id ON bookmarks(post_id)")
     conn.execute("CREATE INDEX idx_bookmarks_created ON bookmarks(created_at)")
+
+
+def drop_redundant_indexes(conn):
+    """Remove indexes superseded by composite prefixes or a UNIQUE constraint."""
+    for name in (
+        "idx_posts_subreddit",
+        "idx_posts_subreddit_score_cmt",
+        "idx_posts_score_cmt",
+        "idx_bookmarks_post_id",
+    ):
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
 
 
 def init_db():
@@ -61,21 +71,18 @@ def init_db():
                 hidden TEXT NOT NULL DEFAULT 'false',
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts(subreddit);
             CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_utc);
             CREATE INDEX IF NOT EXISTS idx_posts_score ON posts(score);
             CREATE INDEX IF NOT EXISTS idx_posts_num_comments ON posts(num_comments);
             CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc);
             CREATE INDEX IF NOT EXISTS idx_posts_subreddit_score ON posts(subreddit, score);
-            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_score_cmt ON posts(subreddit, score, num_comments);
-            CREATE INDEX IF NOT EXISTS idx_posts_score_cmt ON posts(score, num_comments);
+            CREATE INDEX IF NOT EXISTS idx_posts_subreddit_comments ON posts(subreddit, num_comments);
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 post_id TEXT NOT NULL UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_bookmarks_post_id ON bookmarks(post_id);
             CREATE INDEX IF NOT EXISTS idx_bookmarks_created ON bookmarks(created_at);
             CREATE TABLE IF NOT EXISTS scrape_state (
                 subreddit TEXT PRIMARY KEY,
@@ -109,6 +116,7 @@ def init_db():
             "SELECT 1 FROM pragma_table_info('posts') WHERE name='hidden'"
         ).fetchone() is not None
         migrate_bookmarks_foreign_key(conn)
+        drop_redundant_indexes(conn)
         if not had_hidden:
             conn.execute("ALTER TABLE posts ADD COLUMN hidden TEXT NOT NULL DEFAULT 'false'")
         _ensure_fts_update_guard(conn)
@@ -272,6 +280,7 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         if sort not in sort_map:
             raise ValueError(f"invalid sort: {sort!r}")
         col, direction = sort_map[sort]
+        order_by = f"{col} {direction}, rowid {direction}"
         # `offset` overrides the page-derived offset (single-row top-ups after
         # hides, which must read past the page window without shifting pages).
         if offset is None:
@@ -296,38 +305,43 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         # (0.8s on the AI group); branches stay on the (subreddit, <sort col>)
         # index (~5ms). Shallow pages only — past a deep offset the per-branch
         # cutoffs fetch more rows than the plain scan costs, so deep pages fall
-        # back to the IN-list below. id breaks ties so pages are stable.
+        # back to the IN-list below. rowid breaks ties so pages are stable and
+        # the sort stays index-backed; branches expose it for the outer sort.
         if subreddits and len(subreddits) > 1 and limit + offset <= 5000:
             branches, branch_params = [], []
             for sub in subreddits:
                 branches.append(
-                    f"SELECT * FROM (SELECT * FROM posts WHERE 1=1 AND subreddit = ?{filters} "
-                    f"ORDER BY {col} {direction}, id ASC LIMIT ?)"
+                    f"SELECT * FROM (SELECT rowid AS _rowid, * FROM posts "
+                    f"WHERE 1=1 AND subreddit = ?{filters} "
+                    f"ORDER BY {order_by} LIMIT ?)"
                 )
                 branch_params.extend([sub] + params + [limit + offset])
             sql = (
                 " UNION ALL ".join(branches)
-                + f" ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?"
+                + f" ORDER BY {col} {direction}, _rowid {direction} LIMIT ? OFFSET ?"
             )
             rows = conn.execute(sql, branch_params + [limit, offset]).fetchall()
-            return [dict(row) for row in rows], total
+            return [
+                {k: v for k, v in dict(row).items() if k != "_rowid"} for row in rows
+            ], total
 
         if subreddits:
             placeholders = ",".join("?" * len(subreddits))
             rows = conn.execute(
                 f"SELECT * FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters} "
-                f"ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                f"ORDER BY {order_by} LIMIT ? OFFSET ?",
                 list(subreddits) + params + [limit, offset],
             ).fetchall()
         elif subreddit:
             rows = conn.execute(
                 f"SELECT * FROM posts WHERE 1=1 AND subreddit = ?{filters} "
-                f"ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                f"ORDER BY {order_by} LIMIT ? OFFSET ?",
                 [subreddit] + params + [limit, offset],
             ).fetchall()
         else:
             rows = conn.execute(
-                f"SELECT * FROM posts WHERE 1=1{filters} ORDER BY {col} {direction}, id ASC LIMIT ? OFFSET ?",
+                f"SELECT * FROM posts WHERE 1=1{filters} "
+                f"ORDER BY {order_by} LIMIT ? OFFSET ?",
                 params + [limit, offset],
             ).fetchall()
         return [dict(row) for row in rows], total
