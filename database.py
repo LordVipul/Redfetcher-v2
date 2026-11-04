@@ -499,12 +499,12 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
             params.append(param)
 
         sort_map = {
-            "oldest": "b.created_at ASC",
-            "newest": "b.created_at DESC",
-            "score_desc": "p.score DESC",
-            "score_asc": "p.score ASC",
-            "comments_desc": "p.num_comments DESC",
-            "comments_asc": "p.num_comments ASC",
+            "oldest": "b.created_at ASC, b.id ASC",
+            "newest": "b.created_at DESC, b.id DESC",
+            "score_desc": "p.score DESC, b.id DESC",
+            "score_asc": "p.score ASC, b.id ASC",
+            "comments_desc": "p.num_comments DESC, b.id DESC",
+            "comments_asc": "p.num_comments ASC, b.id ASC",
         }
         if sort not in sort_map:
             raise ValueError(f"invalid sort: {sort!r}")
