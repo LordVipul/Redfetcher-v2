@@ -81,16 +81,24 @@ def hide_duplicated_posts():
         conn.close()
 
 
+def _is_reddit_permalink(url):
+    """True for Reddit post/short links, which never prove a post is gone."""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return host == "reddit.com" or host.endswith(".reddit.com") or host == "redd.it"
+
+
 def _get_urls_to_check():
     """External, visible, never-checked (or stale) URLs, capped per run.
 
-    `*reddit.com/*` permalinks are excluded — reddit returns 200 for deleted
-    posts, so a check can't distinguish readable from removed content.
-    Reddit-hosted media (`i.redd.it`, `v.redd.it`) still rots and is checked.
+    Reddit post links are excluded — reddit returns 200 for deleted posts, so
+    a check can't distinguish readable from removed content. Reddit-hosted
+    media (`i.redd.it`, `v.redd.it`) still rots and is checked.
     """
     conn = database.get_connection()
     try:
-        return [
+        # Over-fetch: Reddit links are dropped below before capping.
+        candidates = config.DEAD_LINK_CHECK_LIMIT * 2
+        urls = [
             r["url"]
             for r in conn.execute(
                 """
@@ -99,7 +107,6 @@ def _get_urls_to_check():
                 LEFT JOIN link_checks c ON c.url = p.url
                 WHERE p.hidden = 'false'
                   AND p.url LIKE 'http%'
-                  AND p.url NOT LIKE '%reddit.com/%'
                   AND (
                     c.url IS NULL
                     OR (c.status NOT IN ('dead', 'dns_fail')
@@ -107,11 +114,13 @@ def _get_urls_to_check():
                   )
                 LIMIT ?
                 """,
-                (f"-{config.DEAD_LINK_RECHECK_DAYS} days", config.DEAD_LINK_CHECK_LIMIT),
+                (f"-{config.DEAD_LINK_RECHECK_DAYS} days", candidates),
             ).fetchall()
         ]
     finally:
         conn.close()
+    external = [url for url in urls if not _is_reddit_permalink(url)]
+    return external[: config.DEAD_LINK_CHECK_LIMIT]
 
 
 def _check_url(url):
