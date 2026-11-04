@@ -36,7 +36,11 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/201001
 
 
 def hide_duplicated_posts():
-    """Hide non-earliest copies of same-day same-title posts. Returns count."""
+    """Hide non-earliest copies when every same-title copy is within the window.
+
+    The window is measured over the whole subreddit+title group, so a single
+    copy outside DUP_WINDOW_SECONDS leaves the group untouched.
+    """
     conn = database.get_connection()
     try:
         rows = conn.execute(
