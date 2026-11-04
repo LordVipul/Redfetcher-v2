@@ -232,7 +232,7 @@
     updatePagination(state.page, tp);
   }
 
-  function undoHide(postId, undoState) {
+  function undoHide(postId, undoState, wasBookmarked) {
     return function () {
       fetch("/posts/" + postId + "/hide", { method: "DELETE" })
         .then(function (res) {
@@ -261,6 +261,7 @@
           }
           // Counters are right either way: one unhide always adds one row.
           afterHideReverted();
+          if (wasBookmarked) updateBookmarkCount(1);
           if (!restored) {
             // Feed was re-fetched since the hide; the row reappears on the
             // next natural view of its position.
@@ -306,6 +307,7 @@
     if (isBookmarksView()) return;
     btn.classList.add("busy");
     var postId = btn.dataset.postId;
+    var wasBookmarked = (window.__bookmarked || []).indexOf(postId) !== -1;
     var row = btn.closest(".post-item");
     // Row snapshot for undo: exact child index within the feed + markup.
     var undoState = null;
@@ -319,7 +321,8 @@
     fetch("/posts/" + postId + "/hide", { method: "POST" })
       .then(function (res) {
         if (!res.ok) throw new Error();
-        toastWithUndo("Post hidden", "info", undoHide(postId, undoState));
+        if (wasBookmarked) updateBookmarkCount(-1);
+        toastWithUndo("Post hidden", "info", undoHide(postId, undoState, wasBookmarked));
         if (!row) {
           refillFeed();
           return;

@@ -47,9 +47,6 @@ def init_db():
         had_fts = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='posts_fts'"
         ).fetchone() is not None
-        had_hidden = conn.execute(
-            "SELECT 1 FROM pragma_table_info('posts') WHERE name='hidden'"
-        ).fetchone() is not None
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS posts (
@@ -107,6 +104,9 @@ def init_db():
             END;
             """
         )
+        had_hidden = conn.execute(
+            "SELECT 1 FROM pragma_table_info('posts') WHERE name='hidden'"
+        ).fetchone() is not None
         migrate_bookmarks_foreign_key(conn)
         if not had_hidden:
             conn.execute("ALTER TABLE posts ADD COLUMN hidden TEXT NOT NULL DEFAULT 'false'")
@@ -403,8 +403,10 @@ def hide_posts_by_urls(urls):
 def add_bookmark(post_id):
     conn = get_connection()
     try:
-        exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if exists is None:
+        visible = conn.execute(
+            "SELECT 1 FROM posts WHERE id = ? AND hidden = 'false'", (post_id,)
+        ).fetchone()
+        if visible is None:
             return False
         conn.execute("INSERT OR IGNORE INTO bookmarks (post_id) VALUES (?)", (post_id,))
         conn.commit()
@@ -439,10 +441,16 @@ def get_bookmark_ids_for(post_ids):
         conn.close()
 
 
+_VISIBLE_BOOKMARK_COUNT_SQL = (
+    "SELECT COUNT(*) FROM bookmarks b JOIN posts p ON p.id = b.post_id "
+    "WHERE p.hidden = 'false'"
+)
+
+
 def get_bookmark_count():
     conn = get_connection()
     try:
-        return conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+        return conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
     finally:
         conn.close()
 
@@ -453,7 +461,7 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
         where = """
             FROM posts p
             INNER JOIN bookmarks b ON p.id = b.post_id
-            WHERE 1=1
+            WHERE p.hidden = 'false'
         """
         params = []
 
@@ -531,7 +539,7 @@ def get_dashboard_data(top_posts_limit=10):
                 "SUM(score) AS total_score FROM posts WHERE hidden = 'false'"
             ).fetchone()
         )
-        totals["bookmarks"] = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+        totals["bookmarks"] = conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
         totals["hidden"] = conn.execute(
             "SELECT COUNT(*) FROM posts WHERE hidden = 'true'"
         ).fetchone()[0]
