@@ -77,12 +77,15 @@ RESUME_OVERLAP_HOURS = 48
 DUP_TITLE_MIN_CHARS = 30
 DUP_WINDOW_SECONDS = 7 * 86400
 
-# Dead-link checker: an external URL that answers 404/410 or fails DNS is
-# hidden automatically; anything less conclusive (timeouts, 5xx, 403) gets
-# marked for a recheck after DEAD_LINK_RECHECK_DAYS instead. Reddit permalinks
-# are never checked — reddit serves 200 even for deleted posts, so checking
-# them can never distinguish readable from removed content.
+# Dead-link checker: an external URL that answers 404/410 or does not resolve
+# (NXDOMAIN) is hidden automatically; anything less conclusive (timeouts, 5xx,
+# 403, transient DNS failures) gets marked for a recheck after
+# DEAD_LINK_RECHECK_DAYS instead. Conclusive deaths are revisited less often
+# (DEAD_LINK_DEAD_RECHECK_DAYS) so a revived site can be re-evaluated. Reddit
+# permalinks are never checked — reddit serves 200 even for deleted posts, so
+# checking them can never distinguish readable from removed content.
 DEAD_LINK_CHECK_LIMIT = 2000      # max URLs checked per maintenance run
 DEAD_LINK_CONCURRENCY = 8         # parallel HTTP requests
 DEAD_LINK_TIMEOUT = 15            # seconds per request
 DEAD_LINK_RECHECK_DAYS = 7        # recheck inconclusive statuses after this
+DEAD_LINK_DEAD_RECHECK_DAYS = 30  # recheck conclusive dead/dns_fail after this

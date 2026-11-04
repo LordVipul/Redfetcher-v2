@@ -109,12 +109,18 @@ def _get_urls_to_check():
                   AND p.url LIKE 'http%'
                   AND (
                     c.url IS NULL
-                    OR (c.status NOT IN ('dead', 'dns_fail')
-                        AND c.checked_at < datetime('now', ?))
+                    OR c.checked_at < datetime(
+                        'now',
+                        CASE WHEN c.status IN ('dead', 'dns_fail') THEN ? ELSE ? END
+                    )
                   )
                 LIMIT ?
                 """,
-                (f"-{config.DEAD_LINK_RECHECK_DAYS} days", candidates),
+                (
+                    f"-{config.DEAD_LINK_DEAD_RECHECK_DAYS} days",
+                    f"-{config.DEAD_LINK_RECHECK_DAYS} days",
+                    candidates,
+                ),
             ).fetchall()
         ]
     finally:
@@ -137,8 +143,8 @@ def _check_url(url):
         resp = requests.head(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
         status = resp.status_code
     except requests.RequestException:
-        # Timeouts/5xx-adjacent failures are inconclusive, but a hostname the
-        # OS cannot resolve at all IS conclusive: the domain is gone.
+        # Timeouts/5xx-adjacent failures are inconclusive. A hostname that
+        # does not exist is conclusive; transient resolver failures are not.
         return _dns_verdict(host)
     # HEAD-unfriendly servers: retry once with GET before trusting the status.
     if status in (405, 501):
@@ -154,18 +160,24 @@ def _check_url(url):
 
 
 def _dns_verdict(host):
+    """Conclusive only when the name does not exist; transient DNS is not."""
     try:
         socket.getaddrinfo(host, None)
         return "error"
-    except socket.gaierror:
-        return "dns_fail"
+    except socket.gaierror as exc:
+        absent = {
+            getattr(socket, "EAI_NONAME", None),
+            getattr(socket, "EAI_NODATA", None),
+        }
+        return "dns_fail" if exc.errno in absent else "error"
 
 
 def check_external_links():
     """Check a capped batch of external URLs; hide conclusive deaths.
 
-    Results (including 'ok' and retries) are cached in link_checks so each
-    URL is visited at most once per DEAD_LINK_RECHECK_DAYS.
+    Results (including 'ok' and retries) are cached in link_checks: inconclusive
+    statuses are revisited after DEAD_LINK_RECHECK_DAYS, conclusive deaths after
+    DEAD_LINK_DEAD_RECHECK_DAYS.
     """
     urls = _get_urls_to_check()
     if not urls:
