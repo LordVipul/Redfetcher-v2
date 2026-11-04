@@ -7,6 +7,10 @@ import config
 
 log = logging.getLogger("redfetcher")
 
+# get_posts() uses one indexed branch per subreddit up to this (limit + offset)
+# window; past it the IN-list fallback keeps fan-out memory bounded.
+GROUP_BRANCH_MAX_WINDOW = 5000
+
 
 def get_connection():
     conn = sqlite3.connect(config.DB_PATH)
@@ -342,15 +346,15 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         # Group queries: one indexed per-subreddit branch, merged and sorted in
         # SQL. A single IN-list makes SQLite temp-b-tree-sort every matching row
         # (0.8s on the AI group); branches stay on the (subreddit, <sort col>)
-        # index (~5ms). Shallow pages only — past a deep offset the per-branch
-        # cutoffs fetch more rows than the plain scan costs, so deep pages fall
-        # back to the IN-list below. rowid breaks ties so pages are stable and
-        # the sort stays index-backed; branches expose it for the outer sort.
-        if subreddits and len(subreddits) > 1 and limit + offset <= 5000:
+        # index (~5ms). Branches return only (rowid, sort column) so the outer
+        # sort stays narrow; full rows are fetched after the final page slice.
+        # Past GROUP_BRANCH_MAX_WINDOW the IN-list fallback keeps fan-out
+        # bounded. rowid breaks ties so pages stay stable.
+        if subreddits and len(subreddits) > 1 and limit + offset <= GROUP_BRANCH_MAX_WINDOW:
             branches, branch_params = [], []
             for sub in subreddits:
                 branches.append(
-                    f"SELECT * FROM (SELECT rowid AS _rowid, * FROM posts "
+                    f"SELECT * FROM (SELECT rowid AS _rowid, {col} FROM posts "
                     f"WHERE 1=1 AND subreddit = ?{filters} "
                     f"ORDER BY {order_by} LIMIT ?)"
                 )
@@ -359,10 +363,19 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
                 " UNION ALL ".join(branches)
                 + f" ORDER BY {col} {direction}, _rowid {direction} LIMIT ? OFFSET ?"
             )
-            rows = conn.execute(sql, branch_params + [limit, offset]).fetchall()
-            return [
-                {k: v for k, v in dict(row).items() if k != "_rowid"} for row in rows
-            ], total
+            keys = conn.execute(sql, branch_params + [limit, offset]).fetchall()
+            rowids = [key["_rowid"] for key in keys]
+            if not rowids:
+                return [], total
+            placeholders = ",".join("?" * len(rowids))
+            by_rowid = {
+                row["_rowid"]: {k: v for k, v in dict(row).items() if k != "_rowid"}
+                for row in conn.execute(
+                    f"SELECT *, rowid AS _rowid FROM posts WHERE rowid IN ({placeholders})",
+                    rowids,
+                )
+            }
+            return [by_rowid[rowid] for rowid in rowids if rowid in by_rowid], total
 
         if subreddits:
             placeholders = ",".join("?" * len(subreddits))
