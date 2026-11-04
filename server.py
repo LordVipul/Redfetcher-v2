@@ -41,20 +41,36 @@ def format_date(value):
         return str(value)
 
 
+def _parse_iso_utc(date_str):
+    """Parse ISO input as UTC; offsets and trailing Z are honoured."""
+    s = date_str.strip()
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(s)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def to_timestamp(date_str):
     """Convert an ISO date string to a Unix timestamp, or None."""
     if not date_str:
         return None
-    return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp()
+    return _parse_iso_utc(date_str).timestamp()
 
 
 def to_end_timestamp(date_str):
+    """Convert an ISO date to an exclusive Unix end timestamp, or None.
+
+    Date-only input covers the whole UTC day, so it advances one day.
+    """
     if not date_str:
         return None
-    parsed = datetime.fromisoformat(date_str)
-    if len(date_str.strip()) == 10:
+    value = date_str.strip()
+    parsed = _parse_iso_utc(value)
+    if len(value) == 10:
         parsed += timedelta(days=1)
-    return parsed.replace(tzinfo=timezone.utc).timestamp()
+    return parsed.timestamp()
 
 
 # ── Input validation ─────────────────────────────────────────

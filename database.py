@@ -12,6 +12,7 @@ def get_connection():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-16000")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
