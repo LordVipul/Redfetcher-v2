@@ -50,6 +50,15 @@ python server.py
 
 Open [http://localhost:8000](http://localhost:8000) in your browser. The sidebar lists **All** plus every configured group; the main section shows the selected group's posts with the full filter bar (subreddit scoped to the group, sort, limit, min score/comments, dates, title search). **Bookmarks** sits at the bottom of the sidebar and swaps the main section to saved posts. The gear icon opens settings (dashboard link, hide sidebar, text size, reduce motion). `/dashboard` shows archive statistics.
 
+To reach it from a phone on the same hotspot/LAN, bind to the laptop's address and allow it:
+
+```bash
+RF_HOST=192.168.1.20 python server.py        # laptop's LAN IP, auto-allowed
+RF_HOST=0.0.0.0 RF_ALLOWED_HOSTS=192.168.1.20 python server.py
+```
+
+`RF_ALLOWED_HOSTS` is a comma-separated hostname/IP allowlist (default `127.0.0.1,localhost,::1`); `RF_PORT` defaults to `8000`. Requests with a non-listed `Host`, or state-changing requests from another origin, get a 403. There is **no authentication** — use LAN mode only on a trusted network, and stop the server when done.
+
 ### 4. Browse the database (optional)
 
 Run SQL queries against the local SQLite database:

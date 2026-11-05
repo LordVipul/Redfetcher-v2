@@ -63,6 +63,20 @@ BACKOFF_FACTOR = 2.0
 # _dev/) run against a different file without touching the real archive.
 DB_PATH = os.environ.get("RF_DB_PATH") or str(Path(__file__).resolve().parent / "reddit_archive.db")
 
+# Server binding and request allowlist. Defaults keep the app localhost-only.
+# For phone access on a trusted hotspot/LAN, set RF_HOST to the laptop's LAN IP
+# (added to the allowlist automatically) or 0.0.0.0 (then list the IP in
+# RF_ALLOWED_HOSTS). No authentication exists, so never expose this publicly.
+SERVER_HOST = os.environ.get("RF_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("RF_PORT", "8000"))
+ALLOWED_HOSTNAMES = {
+    h.strip().lower()
+    for h in os.environ.get("RF_ALLOWED_HOSTS", "127.0.0.1,localhost,::1").split(",")
+    if h.strip()
+}
+if SERVER_HOST not in ("0.0.0.0", "::"):
+    ALLOWED_HOSTNAMES.add(SERVER_HOST.lower())
+
 START_YEAR = 2005
 POSTS_PER_REQUEST = 100
 MIN_SCRAPE_WINDOW_SECONDS = 1

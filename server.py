@@ -1,4 +1,4 @@
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import asyncio
 import logging
@@ -30,6 +30,41 @@ app = FastAPI(title="RedFetcher v2")
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="templates/static"), name="static")
 app.mount("/fonts", StaticFiles(directory="fonts"), name="fonts")
+
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _hostname(netloc):
+    try:
+        return urlsplit(f"//{netloc}").hostname
+    except ValueError:
+        return None
+
+
+def _same_origin(request, url):
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in ("http", "https")
+        and parsed.netloc.lower() == request.headers.get("host", "").lower()
+    )
+
+
+@app.middleware("http")
+async def enforce_allowed_origins(request: Request, call_next):
+    """Reject non-allowlisted hosts and cross-origin mutation requests."""
+    host = request.headers.get("host", "")
+    if _hostname(host) not in config.ALLOWED_HOSTNAMES:
+        return JSONResponse(status_code=403, content={"error": "invalid host"})
+    if request.method in UNSAFE_METHODS:
+        source = request.headers.get("origin") or request.headers.get("referer")
+        if source and not _same_origin(request, source):
+            return JSONResponse(
+                status_code=403, content={"error": "cross-origin request refused"}
+            )
+    return await call_next(request)
 
 
 def format_date(value):
@@ -600,6 +635,6 @@ async def bookmarks_redirect(request: Request):
 if __name__ == "__main__":
     import uvicorn
     database.init_db()
-    log.info("Starting server on http://127.0.0.1:8000")
-    # Local-only tool: never expose this server publicly — no auth is implemented.
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    log.info("Starting server on http://%s:%s", config.SERVER_HOST, config.SERVER_PORT)
+    # No authentication exists: only widen RF_HOST/RF_ALLOWED_HOSTS on trusted networks.
+    uvicorn.run(app, host=config.SERVER_HOST, port=config.SERVER_PORT)
