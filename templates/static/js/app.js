@@ -78,6 +78,14 @@
     return y + "-" + m + "-" + day + " " + h + ":" + mi;
   }
 
+  // Server-rendered dates carry the raw epoch; reformat in browser-local time.
+  function localizeRenderedDates() {
+    document.querySelectorAll("[data-created-utc]").forEach(function (el) {
+      var value = parseFloat(el.getAttribute("data-created-utc"));
+      if (!isNaN(value)) el.textContent = formatDate(value);
+    });
+  }
+
   function escapeHtml(str) {
     if (!str) return "";
     return str
@@ -1260,6 +1268,7 @@
   });
 
   // ── Boot ────────────────────────────────────────
+  localizeRenderedDates();
   stateFromUrl();
   syncViewUi();
   setActiveGroupButton();

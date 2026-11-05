@@ -41,6 +41,14 @@ def format_date(value):
         return str(value)
 
 
+POST_FIELDS = ("id", "url", "title", "score", "num_comments", "created_utc", "subreddit")
+
+
+def serialize_post(post):
+    """Return the public API payload, dropping internal columns."""
+    return {field: post.get(field) for field in POST_FIELDS}
+
+
 def _parse_iso_utc(date_str):
     """Parse ISO input as UTC; offsets and trailing Z are honoured."""
     s = date_str.strip()
@@ -435,6 +443,7 @@ async def api_posts(
         group_subreddits = group_subs
     else:
         group_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+    results = [serialize_post(post) for post in results]
     return {
         "posts": results,
         "total": total,
@@ -490,10 +499,12 @@ async def api_bookmarks(
                 min_score=min_score, min_comments=min_comments,
             )
     log.info(f"GET /api/bookmarks — {len(results)} bookmarks (sub={subreddit!r}, page={page})")
+    bookmarked_ids = [post["id"] for post in results]
+    results = [serialize_post(post) for post in results]
     return {
         "posts": results,
         "total": total,
-        "bookmarked_ids": [p["id"] for p in results],
+        "bookmarked_ids": bookmarked_ids,
         "subreddits": all_subreddits,
         "page": page,
         "total_pages": total_pages,

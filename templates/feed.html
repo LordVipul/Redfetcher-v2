@@ -90,7 +90,7 @@
         <div class="post-title">
             <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
         </div>
-        <span class="post-date">{{ post.created_utc|datetimeformat }}</span>
+        <span class="post-date" data-created-utc="{{ post.created_utc }}">{{ post.created_utc|datetimeformat }}</span>
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
         <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
         <span class="r-action">

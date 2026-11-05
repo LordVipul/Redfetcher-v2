@@ -26,7 +26,7 @@
     </div>
     <div class="stat-card">
         <span class="stat-label">Span</span>
-        <span class="stat-value stat-value-sm">{{ totals.first_post|datetimeformat }} &rarr; {{ totals.last_post|datetimeformat }}</span>
+        <span class="stat-value stat-value-sm"><span data-created-utc="{{ totals.first_post }}">{{ totals.first_post|datetimeformat }}</span> &rarr; <span data-created-utc="{{ totals.last_post }}">{{ totals.last_post|datetimeformat }}</span></span>
     </div>
 </div>
 
@@ -77,7 +77,7 @@
             <div class="post-title">
                 <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
             </div>
-            <span class="post-date">{{ post.created_utc|datetimeformat }}</span>
+            <span class="post-date" data-created-utc="{{ post.created_utc }}">{{ post.created_utc|datetimeformat }}</span>
             <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ "{:,}".format(post.score) }}</span>
             <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ "{:,}".format(post.num_comments) }}</span>
         </div>
