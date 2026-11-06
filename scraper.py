@@ -358,21 +358,25 @@ def _log_time(value):
 
 
 def find_start_year(subreddit, client):
-    current_year = datetime.now(timezone.utc).year
-    for year in range(config.START_YEAR, current_year + 1):
-        data = client.search_posts(
+    """Return the earliest post's year using a single ascending query."""
+    posts = normalize_response(
+        client.search_posts(
             subreddit=subreddit,
-            after=f"{year}-01-01T00:00:00Z",
-            before=f"{year + 1}-01-01T00:00:00Z",
             limit=1,
             sort="asc",
-            fields=["id"],
+            fields=["created_utc"],
         )
-        posts = normalize_response(data)
-        if posts:
-            log.info("[%s] First posts found in %s", subreddit, year)
-            return year
-    return config.START_YEAR
+    )
+    created = posts[0].get("created_utc") if posts else None
+    if created is None:
+        log.warning("[%s] No posts found; starting from %s", subreddit, config.START_YEAR)
+        return config.START_YEAR
+    try:
+        year = max(datetime.fromtimestamp(float(created), timezone.utc).year, config.START_YEAR)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return config.START_YEAR
+    log.info("[%s] First post found in %s", subreddit, year)
+    return year
 
 
 def get_scrape_start(subreddit, client):
