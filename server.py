@@ -10,19 +10,9 @@ from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta, timezone
 import config
 import database
+from logging_setup import setup_logging
 
 # ── Logging ──────────────────────────────────────────────────
-IST = timezone(timedelta(hours=5, minutes=30), "IST")
-
-
-class ISTFormatter(logging.Formatter):
-    def formatTime(self, record, datefmt=None):
-        return datetime.fromtimestamp(record.created, IST).strftime("%Y-%m-%d %H:%M:%S IST")
-
-
-handler = logging.StreamHandler()
-handler.setFormatter(ISTFormatter("%(asctime)s %(levelname)-8s %(message)s"))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
 log = logging.getLogger("redfetcher")
 
 app = FastAPI(title="RedFetcher v2")
@@ -617,6 +607,7 @@ async def bookmarks_redirect(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
+    setup_logging()
     database.init_db()
     log.info("Starting server on http://%s:%s", config.SERVER_HOST, config.SERVER_PORT)
     # No authentication exists: only widen RF_HOST/RF_ALLOWED_HOSTS on trusted networks.

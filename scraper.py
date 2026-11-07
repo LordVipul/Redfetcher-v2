@@ -9,6 +9,7 @@ from arcshiftwrap.arctic_shift import ArcticShiftClient, split_time_range, norma
 
 import config
 import database
+from logging_setup import IST, setup_logging
 
 
 SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{2,21}$")
@@ -327,17 +328,6 @@ class LoggingArcticShiftClient(ArcticShiftClient):
         return False, detail
 
 
-IST = timezone(timedelta(hours=5, minutes=30), "IST")
-
-
-class ISTFormatter(logging.Formatter):
-    def formatTime(self, record, datefmt=None):
-        return datetime.fromtimestamp(record.created, IST).strftime("%Y-%m-%d %H:%M:%S IST")
-
-
-handler = logging.StreamHandler()
-handler.setFormatter(ISTFormatter("%(asctime)s %(levelname)-8s %(message)s"))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
 log = logging.getLogger("redfetcher")
 
 
@@ -717,6 +707,7 @@ def scrape_all():
 
 
 if __name__ == "__main__":
+    setup_logging()
     database.init_db()
     log.info("Database initialized at %s", config.DB_PATH)
 
