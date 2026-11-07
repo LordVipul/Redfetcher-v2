@@ -1,6 +1,7 @@
 import logging
 import os
 import sqlite3
+import threading
 import time
 
 import config
@@ -261,18 +262,6 @@ def advance_scrape_state(subreddit, next_start):
         conn.close()
 
 
-def get_stats():
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT subreddit, COUNT(*) as count, MAX(created_utc) as last_updated "
-            "FROM posts WHERE hidden = 'false' GROUP BY subreddit ORDER BY count DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
 def _min_filter_clauses(alias, min_score, min_comments):
     """Return (clauses, params) for minimum score/comment thresholds.
 
@@ -401,17 +390,6 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         conn.close()
 
 
-def get_all_subreddits():
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT DISTINCT subreddit FROM posts WHERE hidden = 'false' ORDER BY subreddit"
-        ).fetchall()
-        return [r["subreddit"] for r in rows]
-    finally:
-        conn.close()
-
-
 # ── Hide / curation ───────────────────────────────
 
 def hide_post(post_id):
@@ -514,12 +492,86 @@ _VISIBLE_BOOKMARK_COUNT_SQL = (
 )
 
 
-def get_bookmark_count():
-    conn = get_connection()
-    try:
-        return conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
-    finally:
-        conn.close()
+_SIDEBAR_CACHE_TTL = 60.0
+_SUBREDDIT_CACHE_TTL = 300.0
+_sidebar_cache = {"at": 0.0, "data": None}
+_subreddit_cache = {"at": 0.0, "data": None}
+_sidebar_cache_lock = threading.Lock()
+
+
+def _seed_subreddits(stats):
+    data = sorted(s["subreddit"] for s in stats)
+    _subreddit_cache["at"] = time.monotonic()
+    _subreddit_cache["data"] = data
+    return data
+
+
+def get_subreddits():
+    """Return visible subreddit names, cached for a few minutes."""
+    now = time.monotonic()
+    cached = _subreddit_cache["data"]
+    if cached is not None and now - _subreddit_cache["at"] < _SUBREDDIT_CACHE_TTL:
+        return cached
+
+    with _sidebar_cache_lock:
+        now = time.monotonic()
+        cached = _subreddit_cache["data"]
+        if cached is not None and now - _subreddit_cache["at"] < _SUBREDDIT_CACHE_TTL:
+            return cached
+
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT subreddit FROM posts WHERE hidden = 'false' ORDER BY subreddit"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        data = [r["subreddit"] for r in rows]
+        _subreddit_cache["at"] = time.monotonic()
+        _subreddit_cache["data"] = data
+        return data
+
+
+def get_sidebar_data():
+    """Return sidebar stats, bookmark count, and subreddit names as one bundle.
+
+    The stats query scans every visible post, so the result is cached briefly.
+    Hiding, bookmarking, or scraping from another process can leave the bundle
+    up to ``_SIDEBAR_CACHE_TTL`` seconds stale, matching the dashboard cache.
+    """
+    now = time.monotonic()
+    cached = _sidebar_cache["data"]
+    if cached is not None and now - _sidebar_cache["at"] < _SIDEBAR_CACHE_TTL:
+        return cached
+
+    with _sidebar_cache_lock:
+        now = time.monotonic()
+        cached = _sidebar_cache["data"]
+        if cached is not None and now - _sidebar_cache["at"] < _SIDEBAR_CACHE_TTL:
+            return cached
+
+        conn = get_connection()
+        try:
+            stats = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT subreddit, COUNT(*) as count, MAX(created_utc) as last_updated "
+                    "FROM posts WHERE hidden = 'false' GROUP BY subreddit ORDER BY count DESC"
+                ).fetchall()
+            ]
+            bookmark_count = conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
+        finally:
+            conn.close()
+
+        data = {
+            "stats": stats,
+            "bookmark_count": bookmark_count,
+            "subreddits": _seed_subreddits(stats),
+        }
+        _sidebar_cache["at"] = time.monotonic()
+        _sidebar_cache["data"] = data
+        return data
 
 
 def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=None, end_date=None, q=None, min_score=None, min_comments=None):
@@ -646,6 +698,6 @@ def get_dashboard_data(top_posts_limit=10):
     finally:
         conn.close()
 
-    _dashboard_cache["at"] = now
+    _dashboard_cache["at"] = time.monotonic()
     _dashboard_cache["data"] = data
     return data

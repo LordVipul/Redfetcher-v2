@@ -275,13 +275,12 @@ def resolve_group_param(group):
     return config.GROUPS[group][1] if group in config.GROUPS else None
 
 
-def build_sidebar(subreddit_names, view):
+def build_sidebar(stats, subreddit_names, view):
     """Sidebar model: All + every group with post counts, plus the Bookmarks row.
 
     Active state is derived from the current subreddit set; the matched group
     is highlighted and links emit the `?group=<key>` display form.
     """
-    stats = database.get_stats()
     counts = {s["subreddit"]: s["count"] for s in stats}
     total = sum(counts.values())
     matched = match_group(subreddit_names) if view == "feed" else None
@@ -396,14 +395,12 @@ async def index(
     if page > total_pages:
         return redirect_to_page("/", total_pages, filters, display_key)
 
-    sidebar = await asyncio.to_thread(build_sidebar, names, view)
-    bookmark_count = await asyncio.to_thread(database.get_bookmark_count)
-    if is_bookmarks:
-        all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
-    elif group_subs is not None:
-        all_subreddits = group_subs
-    else:
-        all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+    sidebar_data = await asyncio.to_thread(database.get_sidebar_data)
+    sidebar = build_sidebar(sidebar_data["stats"], names, view)
+    bookmark_count = sidebar_data["bookmark_count"]
+    all_subreddits = (
+        group_subs if group_subs is not None else sidebar_data["subreddits"]
+    )
 
     log.info(
         f"GET / — view={view}, subs={len(names)}, sort={effective_sort}, limit={limit}, "
@@ -477,7 +474,7 @@ async def api_posts(
     if group_subs is not None:
         group_subreddits = group_subs
     else:
-        group_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+        group_subreddits = await asyncio.to_thread(database.get_subreddits)
     results = [serialize_post(post) for post in results]
     return {
         "posts": results,
@@ -491,7 +488,7 @@ async def api_posts(
 
 @app.get("/stats")
 async def stats():
-    data = await asyncio.to_thread(database.get_stats)
+    data = (await asyncio.to_thread(database.get_sidebar_data))["stats"]
     log.info(f"GET /stats — {len(data)} subreddits")
     return data
 
@@ -516,7 +513,7 @@ async def api_bookmarks(
     min_score = parse_min_filter(min_score)
     min_comments = parse_min_filter(min_comments)
     subreddit = names[0] if names else None
-    all_subreddits = await asyncio.to_thread(database.get_all_subreddits)
+    all_subreddits = await asyncio.to_thread(database.get_subreddits)
     results, total = await asyncio.to_thread(
         database.get_bookmarks,
         limit=limit, offset=(page - 1) * limit, sort=sort,
