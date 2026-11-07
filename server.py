@@ -10,7 +10,6 @@ from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta, timezone
 import config
 import database
-import maintenance
 
 # ── Logging ──────────────────────────────────────────────────
 IST = timezone(timedelta(hours=5, minutes=30), "IST")
@@ -176,19 +175,6 @@ def bad_request(message):
 
 
 templates.env.filters["datetimeformat"] = format_date
-
-# ── Startup maintenance ──────────────────────────────────────
-# Curation jobs (duplicate hiding + dead-link check) run once per startup in
-# a background thread; they never block or fail the server itself.
-_background_tasks = set()
-
-
-@app.on_event("startup")
-async def run_startup_maintenance():
-    task = asyncio.create_task(asyncio.to_thread(maintenance.run_maintenance))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-
 
 def query_params(page, filters=None, group_key=None):
     """Build a query string preserving current filters with a new page number.
