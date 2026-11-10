@@ -1,4 +1,4 @@
-"""Maintenance jobs that run once per server startup.
+"""Maintenance jobs for post-scrape curation.
 
 Two curation rules that automation can decide without ever touching
 judgement-based content quality:
@@ -16,7 +16,7 @@ judgement-based content quality:
    checked: reddit serves 200 even for deleted posts.
 
 Both jobs are idempotent and converge: already-hidden posts and already-
-checked rows are skipped, so repeated startups re-check nothing.
+checked rows are skipped, so repeated runs re-check nothing.
 """
 
 import logging
@@ -207,7 +207,7 @@ def check_external_links():
 
 
 def run_maintenance():
-    """Both curation jobs, safe to run at every startup. Never raises."""
+    """Both curation jobs, safe to rerun. Never raises."""
     try:
         dups = hide_duplicated_posts()
         log.info("Maintenance: hid %d duplicate posts", dups)
