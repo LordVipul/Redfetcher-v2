@@ -284,6 +284,7 @@
 
   function refillFeed() {
     if (isBookmarksView()) return;
+    var requestId = feedRequestSeq;
     fetch(apiBase() + "?" + buildQuery(1, { limit: 1, offset: nextFeedIndex }))
       .then(function (res) {
         return res.json().then(function (data) {
@@ -291,6 +292,7 @@
         });
       })
       .then(function (response) {
+        if (requestId !== feedRequestSeq) return;
         if (!response.ok) return; // transient: navigation or the next fetch reconciles
         var posts = (response.data && response.data.posts) || [];
         if (posts.length === 0) return; // end of this filter set — page just runs short
@@ -446,6 +448,9 @@
   // hide-undo snapshots older than the current page skip re-insertion and
   // only fix counters.
   var renderEpoch = 0;
+
+  var feedRequestSeq = 0;
+  var feedAbort = null;
 
   function parseSubSet(str) {
     return (str || "").split(",").filter(Boolean);
@@ -701,19 +706,26 @@
 
   function fetchFeed(page, historyMode) {
     var p = page || 1;
+    var requestId = ++feedRequestSeq;
+    if (feedAbort) feedAbort.abort();
+    feedAbort = typeof AbortController !== "undefined" ? new AbortController() : null;
     state.page = p; // before syncUrl so the history URL carries the requested page
     showSpinner();
     var feed = document.getElementById("post-feed");
     if (feed) feed.classList.add("fading");
     syncUrl(historyMode);
 
-    fetch(apiBase() + "?" + buildQuery(p))
+    fetch(
+      apiBase() + "?" + buildQuery(p),
+      feedAbort ? { signal: feedAbort.signal } : undefined,
+    )
       .then(function (res) {
         return res.json().then(function (data) {
           return { ok: res.ok, status: res.status, data: data };
         });
       })
       .then(function (response) {
+        if (requestId !== feedRequestSeq) return;
         if (!response.ok) {
           var error = new Error(
             (response.data && response.data.error) || "Request failed",
@@ -752,6 +764,7 @@
         if (feed) feed.classList.remove("fading");
       })
       .catch(function (error) {
+        if (requestId !== feedRequestSeq) return;
         if (error && error.status) {
           toast(error.message, "error");
         } else if (!showFeedError("Couldn't load posts", function () {
