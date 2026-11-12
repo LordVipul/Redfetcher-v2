@@ -9,7 +9,7 @@ A local web application that archives Reddit posts from any subreddit since its 
 - **`maintenance.py`** — Curation jobs: hide exact duplicates (same subreddit + identical title >30 chars, all copies within 7 days — earliest kept) and check external URLs for rot (404/410 or DNS failure → hidden; inconclusive statuses cached and rechecked later). Idempotent and converging.
 - **`config.py`** — `GROUPS` (key → short label + subreddits; the sidebar sorts groups by name) and `SUBREDDITS` (derived from `GROUPS`, used by the scraper), plus API/delay settings and duplicate/dead-link thresholds. `RF_DB_PATH` env var points the stack at a different database file (e.g. the dev copy under `_dev/`).
 - **`database.py`** — SQLite init and migrations (including the `hidden` column and `link_checks` cache), batch insert (`executemany`), query helpers (including multi-subreddit group queries), dashboard aggregations, full bookmarks CRUD, and single/bulk hide helpers.
-- **`sql.py`** — CLI tool for running ad-hoc SQL against `reddit_archive.db`. It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
+- **`sql.py`** — CLI tool for running ad-hoc SQL against the configured database (`RF_DB_PATH`, default `reddit_archive.db`). It executes whatever statement you pass, so it can `DELETE` or `UPDATE` as well as `SELECT`.
 - **Both scraper and server are completely separate.** The scraper is the only thing that writes posts. The server never scrapes; it reads posts and writes only bookmarks and hidden flags.
 
 ## Requirements
@@ -85,7 +85,7 @@ The scraper:
 - Uses exact UTC timestamps and sequential requests with a two-second delay
 - Starts with 30-day windows and splits any window that returns the 100-post API cap
 - Splits down to a 1-second floor; if a single second still returns 100 posts (a bot/spam flood), it captures up to 200 via ascending + descending queries and advances past the rest
-- Stores posts in `reddit_archive.db` using batch `INSERT OR IGNORE` (no duplicates)
+- Stores posts in the configured database (`RF_DB_PATH`, default `reddit_archive.db`) using batch `INSERT OR IGNORE` (no duplicates)
 - Persists a durable per-subreddit checkpoint after every complete window
 - Rechecks the last 48 hours on resumed runs to catch recently archived posts
 - Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
@@ -183,7 +183,7 @@ Edit `config.py` to customize:
 
 ```python
 GROUPS = {
-    "ai": ("AI", [
+    "ai": ("A.I.", [
         "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
     ]),
     "web": ("Web dev", ["css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev"]),
@@ -195,7 +195,7 @@ REQUEST_DELAY = 2.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 30           # API request timeout
 MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries)
 BACKOFF_FACTOR = 2.0          # Exponential backoff factor
-DB_PATH = "reddit_archive.db" # SQLite database file
+DB_PATH = os.environ.get("RF_DB_PATH") or str(Path(__file__).resolve().parent / "reddit_archive.db")
 START_YEAR = 2005             # Earliest year checked during full backfill
 POSTS_PER_REQUEST = 100       # Maximum requested from the API
 MIN_SCRAPE_WINDOW_SECONDS = 1 # Stop splitting a saturated window below this width
@@ -205,8 +205,8 @@ TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout coold
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 
 # Post curation (maintenance.py)
-DUP_TITLE_MIN_CHARS = 30          # Duplicate rule: identical title, same subreddit, this length or longer
-DUP_WINDOW_SECONDS = 604800       # ...with all copies inside this window (earliest kept)
+DUP_TITLE_MIN_CHARS = 30          # Duplicate rule: identical title, same subreddit, longer than this
+DUP_WINDOW_SECONDS = 7 * 86400    # ...with all copies inside 7 days (earliest kept)
 DEAD_LINK_CHECK_LIMIT = 2000      # External URLs checked per maintenance run
 DEAD_LINK_CONCURRENCY = 8         # Parallel HTTP requests
 DEAD_LINK_TIMEOUT = 15            # Seconds per request
@@ -250,7 +250,7 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | ----------- | -------------------------------------------------------- |
 | `url`       | Checked external URL (primary key)                       |
 | `status`    | Last check result: `ok`, `dead`, `dns_fail`, or `error`  |
-| `checked_at`| When the check ran (`dead`/`dns_fail` are never rechecked; others after `DEAD_LINK_RECHECK_DAYS`) |
+| `checked_at`| When the check ran (`dead`/`dns_fail` after `DEAD_LINK_DEAD_RECHECK_DAYS`; other statuses after `DEAD_LINK_RECHECK_DAYS`) |
 
 ### Scrape State Table
 
@@ -326,7 +326,7 @@ redfetcher-v2/
 
 ### URL Handling
 
-The templates check if `post.url` already starts with `http` before prepending `https://www.reddit.com`. The Arctic Shift API returns full URLs, so no prefix is added.
+The server filter and client helper accept only `http://` or `https://` URLs; any other value is rendered as a `reddit.com` path. The Arctic Shift API returns full URLs, so no prefix is added in normal operation.
 
 ### Client-Side Features
 
