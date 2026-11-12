@@ -351,6 +351,7 @@
       });
   });
 
+  // Keep this markup in sync with the server-side loop in templates/feed.html.
   function renderPost(post, isBookmarked) {
     var url =
       post.url && post.url.startsWith("http")
