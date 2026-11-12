@@ -65,6 +65,14 @@ def format_date(value):
         return str(value)
 
 
+def post_url(value):
+    """Return an http(s) URL, else a safe reddit.com path."""
+    url = value if isinstance(value, str) else ""
+    if url.lower().startswith(("http://", "https://")):
+        return url
+    return "https://www.reddit.com" + ("" if url.startswith("/") else "/") + url
+
+
 POST_FIELDS = ("id", "url", "title", "score", "num_comments", "created_utc", "subreddit")
 
 
@@ -165,6 +173,7 @@ def bad_request(message):
 
 
 templates.env.filters["datetimeformat"] = format_date
+templates.env.filters["post_url"] = post_url
 
 def query_params(page, filters=None, group_key=None):
     """Build a query string preserving current filters with a new page number.

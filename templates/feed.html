@@ -89,7 +89,7 @@
     <div class="post-item" data-post-id="{{ post.id }}" role="listitem">
         <a href="/?subreddit={{ post.subreddit }}" class="r-badge js-subreddit" data-subreddit="{{ post.subreddit }}">r/{{ post.subreddit }}</a>
         <div class="post-title">
-            <a href="{{ post.url if post.url.startswith('http') else 'https://www.reddit.com' + post.url }}" target="_blank" rel="noopener" title="{{ post.title|e }}">{{ post.title }}</a>
+            <a href="{{ post.url|post_url }}" target="_blank" rel="noopener" title="{{ post.title }}">{{ post.title }}</a>
         </div>
         <span class="post-date" data-created-utc="{{ post.created_utc }}">{{ post.created_utc|datetimeformat }}</span>
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>

@@ -87,12 +87,20 @@
   }
 
   function escapeHtml(str) {
-    if (!str) return "";
-    return str
+    if (str === null || str === undefined) return "";
+    return String(str)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/`/g, "&#96;");
+  }
+
+  function postUrl(url) {
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) return url;
+    var path = typeof url === "string" ? url : "";
+    return "https://www.reddit.com" + (path.charAt(0) === "/" ? "" : "/") + path;
   }
 
   // Minimum score/comments: null and "" mean "no filter"; 0 is a real filter.
@@ -355,10 +363,7 @@
 
   // Keep this markup in sync with the server-side loop in templates/feed.html.
   function renderPost(post, isBookmarked) {
-    var url =
-      post.url && post.url.startsWith("http")
-        ? post.url
-        : "https://www.reddit.com" + (post.url || "");
+    var url = postUrl(post.url);
     var title = escapeHtml(post.title);
     var date = formatDate(post.created_utc);
     var badge =
@@ -371,11 +376,11 @@
       "</a>";
     var score =
       '<span class="r-score"><i class="fa-solid fa-arrow-up"></i> ' +
-      (post.score || 0) +
+      escapeHtml(post.score == null ? 0 : post.score) +
       "</span>";
     var comments =
       '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' +
-      (post.num_comments || 0) +
+      escapeHtml(post.num_comments == null ? 0 : post.num_comments) +
       "</span>";
     var dt = '<span class="post-date">' + date + "</span>";
     var cls = isBookmarked ? " is-active" : "";
@@ -405,7 +410,7 @@
       '<div class="post-title"><a href="' +
       escapeHtml(url) +
       '" target="_blank" rel="noopener" title="' +
-      escapeHtml(title) +
+      title +
       '">' +
       title +
       "</a></div>" +
