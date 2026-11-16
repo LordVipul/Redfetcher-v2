@@ -1,11 +1,15 @@
+"""Arctic Shift scraper with cursor pagination and adaptive pacing."""
+
 import logging
+import random
 import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 
 import requests
-from arcshiftwrap.arctic_shift import ArcticShiftClient, split_time_range, normalize_response
+from arcshiftwrap.arctic_shift import ArcticShiftClient, normalize_response
 
 import config
 import database
@@ -13,338 +17,450 @@ from logging_setup import IST, setup_logging
 
 
 SUBREDDIT_RE = re.compile(r"^[a-zA-Z0-9_]{2,21}$")
+FIELDS = ["id", "title", "url", "score", "num_comments", "created_utc", "subreddit"]
+
+MIN_REQUEST_INTERVAL = 0.5
+MAX_REQUEST_INTERVAL = 4.0
+MAX_ATTEMPTS = 5
+BACKOFF_BASE = 1.0
+BACKOFF_CAP = 8.0
+RATE_LIMIT_CAP = 60.0
+PROGRESS_INTERVAL = 15.0
+INSERT_BATCH_ROWS = 500
+INSERT_FLUSH_SECONDS = 3.0
+
+log = logging.getLogger("redfetcher")
+
+STATUS_LABELS = {
+    400: "bad request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not found",
+    422: "unprocessable",
+    429: "rate limited",
+    500: "server error",
+    502: "bad gateway",
+    503: "service unavailable",
+    504: "gateway timeout",
+    522: "connection timed out",
+    523: "origin unreachable",
+    530: "origin DNS error",
+}
+
+
+def _status_label(response):
+    label = STATUS_LABELS.get(response.status_code)
+    if label:
+        return f"{response.status_code} {label}"
+    try:
+        reason = HTTPStatus(response.status_code).phrase
+    except ValueError:
+        reason = response.reason or ""
+    return f"{response.status_code} {reason}".strip()
+
+
+def _api_error(response):
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, str) and error.strip():
+            return " ".join(error.split())[:200]
+    text = " ".join((response.text or "").split())
+    return text[:200] or "<empty>"
 
 
 class ScrapeError(RuntimeError):
     pass
 
 
-class QueryTimeoutError(ScrapeError):
-    pass
-
-
-class LoggingArcticShiftClient(ArcticShiftClient):
-    # Consecutive query-timeout 422s; drives the post-success cooldown in request()
-    timeout_streak = 0
-
-    def _body_summary(self, response):
-        text = " ".join((response.text or "").split())
-        if not text:
-            return "<empty>"
-        if len(text) > 400:
-            return text[:397] + "..."
-        return text
-
-    def _retry_delay(self, attempt):
-        return min(self.backoff_factor**attempt, 60.0)
-
-    def _rate_limit_delay(self, response):
-        retry_after = response.headers.get("Retry-After")
-        if retry_after and retry_after.isdigit():
-            return max(1, int(retry_after))
-        return max(1, self._rate_limit_wait(response))
-
-    def _query_timeout_delay(self, attempt):
-        backoff = config.QUERY_TIMEOUT_BACKOFF
-        return backoff[min(attempt, len(backoff)) - 1]
-
-    def _query_timeout_cooldown(self):
-        return min(config.TIMEOUT_COOLDOWN_BASE ** self.timeout_streak, config.TIMEOUT_COOLDOWN_CAP)
-
-    def request(self, endpoint, params=None):
-        url = f"{self.base_url}{endpoint}"
-        clean_params = self._clean(params)
-        max_attempts = max(1, self.max_retries)
-        query_timeout_retries = 0
-
-        for attempt in range(1, max_attempts + 1):
-            log.debug(
-                "API request attempt=%d/%d method=GET url=%s params=%s",
-                attempt,
-                max_attempts,
-                url,
-                clean_params,
-            )
-            try:
-                response = self.session.get(url, params=clean_params, timeout=self.timeout)
-            except requests.exceptions.Timeout as exc:
-                if attempt >= max_attempts:
-                    log.error(
-                        "API request timed out (attempt %d/%d) url=%s",
-                        attempt,
-                        max_attempts,
-                        url,
-                    )
-                    raise ScrapeError(
-                        f"API request timed out after {max_attempts} attempts: {url}"
-                    ) from exc
-                delay = self._retry_delay(attempt)
-                log.warning(
-                    "API request timed out (attempt %d/%d) url=%s; retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    url,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-            except requests.RequestException as exc:
-                if attempt >= max_attempts:
-                    log.error(
-                        "API request network failure (attempt %d/%d) url=%s error=%s: %s",
-                        attempt,
-                        max_attempts,
-                        url,
-                        type(exc).__name__,
-                        exc,
-                    )
-                    raise ScrapeError(
-                        f"API request network failure after {max_attempts} attempts: "
-                        f"{type(exc).__name__}: {url}"
-                    ) from exc
-                delay = self._retry_delay(attempt)
-                log.warning(
-                    "API request network failure (attempt %d/%d) url=%s error=%s: %s; "
-                    "retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    url,
-                    type(exc).__name__,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-
-            status = response.status_code
-            body = self._body_summary(response)
-            reason = response.reason or ""
-            query_timeout = "timeout" in body.lower() or "slow down" in body.lower()
-
-            if status == 422 and query_timeout:
-                self.timeout_streak += 1
-                if attempt >= max_attempts:
-                    log.error(
-                        "API query timeout (attempt %d/%d) status=422 reason=%s body=%s "
-                        "url=%s; not recovered after %d attempts, giving up so the "
-                        "window can be split",
-                        attempt,
-                        max_attempts,
-                        reason,
-                        body,
-                        url,
-                        max_attempts,
-                    )
-                    raise QueryTimeoutError(
-                        f"API query timeout after {max_attempts} attempts: "
-                        f"status=422 reason={reason} body={body} url={url}"
-                    )
-                query_timeout_retries += 1
-                delay = self._query_timeout_delay(attempt)
-                log.warning(
-                    "API query timeout (attempt %d/%d) status=422 reason=%s body=%s "
-                    "url=%s; retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    reason,
-                    body,
-                    url,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-
-            if status == 429:
-                reset = response.headers.get("X-RateLimit-Reset", "<missing>")
-                if attempt >= max_attempts:
-                    log.error(
-                        "API rate limited (attempt %d/%d) status=429 X-RateLimit-Reset=%s "
-                        "body=%s url=%s; no further attempts",
-                        attempt,
-                        max_attempts,
-                        reset,
-                        body,
-                        url,
-                    )
-                    raise ScrapeError(
-                        f"API rate limited after {max_attempts} attempts: status=429 "
-                        f"X-RateLimit-Reset={reset} body={body} url={url}"
-                    )
-                delay = self._rate_limit_delay(response)
-                log.warning(
-                    "API rate limited (attempt %d/%d) status=429 X-RateLimit-Reset=%s "
-                    "body=%s url=%s; retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    reset,
-                    body,
-                    url,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-
-            if status in {500, 502, 503, 504, 522, 523} or "query timed out" in body.lower():
-                if attempt >= max_attempts:
-                    log.error(
-                        "API service failure (attempt %d/%d) status=%d reason=%s "
-                        "body=%s url=%s; no further attempts",
-                        attempt,
-                        max_attempts,
-                        status,
-                        reason,
-                        body,
-                        url,
-                    )
-                    raise ScrapeError(
-                        f"API service failure after {max_attempts} attempts: "
-                        f"status={status} reason={reason} body={body} url={url}"
-                    )
-                delay = self._retry_delay(attempt)
-                log.warning(
-                    "API service failure (attempt %d/%d) status=%d reason=%s body=%s "
-                    "url=%s; retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    status,
-                    reason,
-                    body,
-                    url,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-
-            if status >= 400:
-                log.error(
-                    "API request rejected status=%d reason=%s body=%s url=%s",
-                    status,
-                    reason,
-                    body,
-                    url,
-                )
-                raise ScrapeError(
-                    f"API request rejected: status={status} reason={reason} body={body} url={url}"
-                )
-
-            try:
-                data = response.json()
-            except ValueError as exc:
-                log.error(
-                    "API returned invalid JSON status=%d body=%s url=%s",
-                    status,
-                    body,
-                    url,
-                )
-                raise ScrapeError(
-                    f"API returned invalid JSON: status={status} body={body} url={url}"
-                ) from exc
-
-            time.sleep(self.sleep_seconds)
-            if query_timeout_retries:
-                log.info(
-                    "API query timeout recovered after %d retry(ies) without splitting url=%s",
-                    query_timeout_retries,
-                    url,
-                )
-            if self.timeout_streak:
-                cooldown = self._query_timeout_cooldown()
-                log.info(
-                    "API cooling down %.1fs after query timeout(s) url=%s",
-                    cooldown,
-                    url,
-                )
-                time.sleep(cooldown)
-                self.timeout_streak = 0
-            return data
-
-        raise ScrapeError(f"Unexpected API request failure: {url}")
-
-    def check_health(self, subreddit):
-        url = f"{self.base_url}/api/posts/search"
-        params = {"subreddit": subreddit, "limit": 1, "fields": "id"}
-        max_attempts = max(1, self.max_retries)
-        detail = "no response"
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = self.session.get(url, params=self._clean(params), timeout=self.timeout)
-            except requests.RequestException as exc:
-                detail = f"{type(exc).__name__}: {exc}"
-                if attempt >= max_attempts:
-                    log.error(
-                        "Arctic Shift health check failed (attempt %d/%d) error=%s",
-                        attempt,
-                        max_attempts,
-                        detail,
-                    )
-                    break
-                delay = self._retry_delay(attempt)
-                log.warning(
-                    "Arctic Shift health check failed (attempt %d/%d) error=%s; "
-                    "retrying in %.1fs",
-                    attempt,
-                    max_attempts,
-                    detail,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-
-            status = response.status_code
-            reason = response.reason or ""
-            if 200 <= status < 300:
-                try:
-                    response.json()
-                except ValueError:
-                    detail = f"invalid JSON status={status} body={self._body_summary(response)}"
-                else:
-                    return True, f"status={status}"
-            elif status in (422, 429):
-                return True, f"status={status} reachable"
-            else:
-                detail = (
-                    f"status={status} reason={reason} body={self._body_summary(response)}"
-                )
-
-            if attempt >= max_attempts:
-                log.error(
-                    "Arctic Shift health check failed (attempt %d/%d) %s",
-                    attempt,
-                    max_attempts,
-                    detail,
-                )
-                break
-            delay = self._retry_delay(attempt)
-            log.warning(
-                "Arctic Shift health check failed (attempt %d/%d) %s; retrying in %.1fs",
-                attempt,
-                max_attempts,
-                detail,
-                delay,
-            )
-            time.sleep(delay)
-
-        return False, detail
-
-
-log = logging.getLogger("redfetcher")
-
-
-def _utc_datetime(value):
+def _api_time(value):
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _format_api_datetime(value):
-    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        value = value.replace(tzinfo=timezone.utc)
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _log_time(value):
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+def _fmt_duration(seconds):
+    seconds = max(0, int(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def _as_ts(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _backoff(attempt, jitter):
+    return min(BACKOFF_BASE * (2 ** (attempt - 1)), BACKOFF_CAP) + random.uniform(
+        0, jitter
+    )
+
+
+def _open_connection():
+    conn = database.get_connection()
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-65536")
+    return conn
+
+
+class Pacer:
+    """Adaptive interval between request starts plus throttle state."""
+
+    def __init__(self, min_interval=MIN_REQUEST_INTERVAL):
+        self.min_interval = min_interval
+        self.interval = min_interval
+        self.last_request = 0.0
+        self.throttles = 0
+
+    def wait(self):
+        delay = self.last_request + self.interval - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self.last_request = time.monotonic()
+
+    def on_success(self):
+        self.interval = max(self.min_interval, self.interval * 0.85)
+
+    def _slow_down(self):
+        self.throttles += 1
+        self.interval = min(
+            MAX_REQUEST_INTERVAL,
+            max(self.interval * 1.6, self.min_interval * 2),
+        )
+
+    def on_throttle(self):
+        self._slow_down()
+
+    def on_rate_limit(self, response):
+        self._slow_down()
+        return self._rate_limit_wait(response)
+
+    @staticmethod
+    def _rate_limit_wait(response):
+        now_ms = int(time.time() * 1000)
+        candidates = []
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                candidates.append(float(retry_after))
+            except ValueError:
+                pass
+        reset_at = response.headers.get("X-RateLimit-Reset-At")
+        if reset_at and reset_at.isdigit():
+            candidates.append(max(0.0, (int(reset_at) - now_ms) / 1000.0))
+        reset = response.headers.get("X-RateLimit-Reset")
+        if reset and reset.isdigit():
+            candidates.append(float(reset))
+        wait = max(candidates) if candidates else 30.0
+        return min(max(wait, 1.0), RATE_LIMIT_CAP)
+
+
+class CursorClient(ArcticShiftClient):
+    """ArcticShiftClient with short throttle retries and 429 header handling."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pacer = Pacer()
+        self.requests = 0
+
+    def request(self, endpoint, params=None):
+        url = f"{self.base_url}{endpoint}"
+        clean_params = self._clean(params)
+        subreddit = clean_params.get("subreddit", "-")
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            self.requests += 1
+            self.pacer.wait()
+            try:
+                response = self.session.get(
+                    url, params=clean_params, timeout=self.timeout
+                )
+            except requests.RequestException as exc:
+                delay = _backoff(attempt, 0.4)
+                if attempt >= MAX_ATTEMPTS:
+                    log.error(
+                        "[%s] network error - gave up after %d attempts: %s",
+                        subreddit,
+                        MAX_ATTEMPTS,
+                        exc,
+                    )
+                    raise ScrapeError(
+                        f"network error after {MAX_ATTEMPTS} attempts: {exc}"
+                    ) from exc
+                log.warning(
+                    "[%s] network error (%s) - retrying in %.1fs (attempt %d/%d)",
+                    subreddit,
+                    type(exc).__name__,
+                    delay,
+                    attempt,
+                    MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+                continue
+
+            status = response.status_code
+
+            if status == 429:
+                delay = self.pacer.on_rate_limit(response) + random.uniform(0, 0.5)
+                if attempt >= MAX_ATTEMPTS:
+                    log.error(
+                        "[%s] 429 rate limited - gave up after %d attempts",
+                        subreddit,
+                        MAX_ATTEMPTS,
+                    )
+                    raise ScrapeError("429 rate limited")
+                log.warning(
+                    "[%s] 429 rate limited - retrying in %.1fs (attempt %d/%d)",
+                    subreddit,
+                    delay,
+                    attempt,
+                    MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+                continue
+
+            if status == 422:
+                error = _api_error(response)
+                if "timeout" in error.lower() or "slow down" in error.lower():
+                    self.pacer.on_throttle()
+                    delay = _backoff(attempt, 0.5)
+                    if attempt >= MAX_ATTEMPTS:
+                        log.error(
+                            "[%s] 422 slow down - gave up after %d attempts",
+                            subreddit,
+                            MAX_ATTEMPTS,
+                        )
+                        raise ScrapeError(
+                            f"422 slow down after {MAX_ATTEMPTS} attempts"
+                        )
+                    log.warning(
+                        "[%s] 422 slow down (%s) - retrying in %.1fs "
+                        "(attempt %d/%d)",
+                        subreddit,
+                        error,
+                        delay,
+                        attempt,
+                        MAX_ATTEMPTS,
+                    )
+                    time.sleep(delay)
+                    continue
+                log.error(
+                    "[%s] 422 request rejected (%s)", subreddit, error
+                )
+                raise ScrapeError(f"422 request rejected: {error}")
+
+            if status in {500, 502, 503, 504, 522, 523, 530}:
+                delay = _backoff(attempt, 0.4)
+                label = _status_label(response)
+                if attempt >= MAX_ATTEMPTS:
+                    log.error(
+                        "[%s] %s - gave up after %d attempts",
+                        subreddit,
+                        label,
+                        MAX_ATTEMPTS,
+                    )
+                    raise ScrapeError(label)
+                log.warning(
+                    "[%s] %s - retrying in %.1fs (attempt %d/%d)",
+                    subreddit,
+                    label,
+                    delay,
+                    attempt,
+                    MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+                continue
+
+            if status >= 400:
+                label = _status_label(response)
+                error = _api_error(response)
+                log.error("[%s] %s - %s", subreddit, label, error)
+                raise ScrapeError(f"{label}: {error}")
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                log.error(
+                    "[%s] invalid JSON response (status %d)", subreddit, status
+                )
+                raise ScrapeError(f"invalid JSON (status {status})") from exc
+
+            self.pacer.on_success()
+            return data
+
+        raise ScrapeError(f"unexpected failure: {url}")
+
+    def check_health(self, subreddit):
+        """One tiny probe; 2xx+JSON, 422 and 429 all count as reachable."""
+        url = f"{self.base_url}/api/posts/search"
+        params = {"subreddit": subreddit, "limit": 1, "fields": "id"}
+        try:
+            response = self.session.get(
+                url, params=self._clean(params), timeout=self.timeout
+            )
+        except requests.RequestException as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+
+        status = response.status_code
+        if 200 <= status < 300:
+            try:
+                response.json()
+            except ValueError:
+                return False, "invalid JSON"
+            return True, _status_label(response)
+        if status in (422, 429):
+            return True, _status_label(response)
+        return False, f"{_status_label(response)}: {_api_error(response)}"
+
+
+def _valid_post_row(post, index):
+    """Validate a post, falling back to its permalink when url is empty."""
+    if not isinstance(post, dict):
+        log.warning("Skipping malformed post at batch index %d: %r", index, post)
+        return None
+
+    post_id = post.get("id")
+    subreddit = post.get("subreddit")
+    if not isinstance(post_id, str) or not post_id.strip():
+        log.warning("Skipping post at batch index %d: invalid id %r", index, post_id)
+        return None
+    if not isinstance(subreddit, str) or not subreddit.strip():
+        log.warning("Skipping post %r: invalid subreddit %r", post_id, subreddit)
+        return None
+
+    post_id = post_id.strip()
+    subreddit = subreddit.strip()
+    url = post.get("url")
+    if isinstance(url, str) and url.strip():
+        url = url.strip()
+    else:
+        url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}/"
+        log.debug("Post %r has no url; using permalink %s", post_id, url)
+
+    return (
+        post_id,
+        url,
+        post.get("title"),
+        post.get("score"),
+        post.get("num_comments"),
+        post.get("created_utc"),
+        subreddit,
+    )
+
+
+class ScrapeWriter:
+    """Buffered inserts; checkpoint advanced atomically with the insert batch."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.buffer = []
+        self.last_flush = time.monotonic()
+        self.inserted = 0
+
+    def add(self, posts, subreddit, checkpoint_ts):
+        for index, post in enumerate(posts):
+            row = _valid_post_row(post, index)
+            if row is not None:
+                self.buffer.append(row)
+        if (
+            len(self.buffer) >= INSERT_BATCH_ROWS
+            or (time.monotonic() - self.last_flush) >= INSERT_FLUSH_SECONDS
+        ):
+            self.flush(subreddit, checkpoint_ts)
+
+    def flush(self, subreddit, checkpoint_ts):
+        if not self.buffer and checkpoint_ts is None:
+            self.last_flush = time.monotonic()
+            return
+
+        if self.buffer:
+            cursor = self.conn.executemany(
+                "INSERT OR IGNORE INTO posts "
+                "(id, url, title, score, num_comments, created_utc, subreddit) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                self.buffer,
+            )
+            self.inserted += max(0, cursor.rowcount)
+            self.buffer.clear()
+
+        if checkpoint_ts is not None:
+            self.conn.execute(
+                """
+                INSERT INTO scrape_state (subreddit, next_start) VALUES (?, ?)
+                ON CONFLICT(subreddit) DO UPDATE SET
+                    next_start = CASE
+                        WHEN scrape_state.next_start < excluded.next_start
+                        THEN excluded.next_start
+                        ELSE scrape_state.next_start
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (subreddit, checkpoint_ts),
+            )
+
+        self.conn.commit()
+        self.last_flush = time.monotonic()
+
+
+class SubStats:
+    def __init__(self, subreddit, start, end):
+        self.subreddit = subreddit
+        self.start = start
+        self.end = end
+        self.cursor = start
+        self.started = time.monotonic()
+        self.last_progress = self.started
+        self.requests = 0
+        self.inserted = 0
+        self.throttles = 0
+
+    def elapsed(self):
+        return time.monotonic() - self.started
+
+    def maybe_progress(self):
+        now = time.monotonic()
+        if now - self.last_progress < PROGRESS_INTERVAL:
+            return
+        self.last_progress = now
+
+        total_span = max(1.0, (self.end - self.start).total_seconds())
+        covered = max(0.0, (self.cursor - self.start).total_seconds())
+        pct = min(100.0, 100.0 * covered / total_span)
+        elapsed = self.elapsed()
+        if covered > 0 and total_span > covered:
+            eta = (total_span - covered) * (elapsed / covered)
+            eta_text = _fmt_duration(eta)
+        else:
+            eta_text = "--"
+
+        log.info(
+            "[%s] %d%% complete - %d inserted, ETA %s, %d throttles",
+            self.subreddit,
+            int(pct),
+            self.inserted,
+            eta_text,
+            self.throttles,
+        )
 
 
 def find_start_year(subreddit, client):
@@ -357,13 +473,17 @@ def find_start_year(subreddit, client):
             fields=["created_utc"],
         )
     )
-    created = posts[0].get("created_utc") if posts else None
+    created = _as_ts(posts[0].get("created_utc")) if posts else None
     if created is None:
-        log.warning("[%s] No posts found; starting from %s", subreddit, config.START_YEAR)
+        log.warning(
+            "[%s] No posts found; starting from %s", subreddit, config.START_YEAR
+        )
         return config.START_YEAR
     try:
-        year = max(datetime.fromtimestamp(float(created), timezone.utc).year, config.START_YEAR)
-    except (TypeError, ValueError, OverflowError, OSError):
+        year = max(
+            datetime.fromtimestamp(created, timezone.utc).year, config.START_YEAR
+        )
+    except (ValueError, OverflowError, OSError):
         return config.START_YEAR
     log.info("[%s] First post found in %s", subreddit, year)
     return year
@@ -383,327 +503,224 @@ def get_scrape_start(subreddit, client):
         return resume_dt
 
     start_year = find_start_year(subreddit, client)
-    log.info("[%s] No checkpoint found; starting a full backfill from %s", subreddit, start_year)
+    log.info(
+        "[%s] No checkpoint found; starting a full backfill from %s",
+        subreddit,
+        start_year,
+    )
     return datetime(start_year, 1, 1, tzinfo=timezone.utc)
 
 
-def _request_posts(client, subreddit, start, end, limit, fields, sort, stats):
-    query_start = start - timedelta(seconds=1)
-    query_end = end + timedelta(seconds=1)
-    stats["requests"] += 1
-    log.debug(
-        "[%s] Requesting %s to %s (sort=%s)",
-        subreddit,
-        _log_time(query_start),
-        _log_time(query_end),
-        sort,
-    )
-    data = client.search_posts(
-        subreddit=subreddit,
-        after=_format_api_datetime(query_start),
-        before=_format_api_datetime(query_end),
-        limit=limit,
-        sort=sort,
-        fields=fields,
-    )
-    posts = normalize_response(data)
-    stats["posts_returned"] += len(posts)
-    return posts
-
-
-def _merge_unique_posts(*groups):
-    seen = set()
-    merged = []
-    for group in groups:
-        for post in group:
+def _fetch_boundary_second(client, subreddit, ts):
+    """Fetch one exact second from both ends; only used on detected overflow."""
+    after = _api_time(datetime.fromtimestamp(ts - 1, timezone.utc))
+    before = _api_time(datetime.fromtimestamp(ts + 1, timezone.utc))
+    merged = {}
+    for sort in ("asc", "desc"):
+        data = client.search_posts(
+            subreddit=subreddit,
+            after=after,
+            before=before,
+            limit="auto",
+            sort=sort,
+            fields=FIELDS,
+        )
+        for post in normalize_response(data):
             post_id = post.get("id")
-            if post_id is not None:
-                if post_id in seen:
-                    continue
-                seen.add(post_id)
-            merged.append(post)
-    return merged
-
-
-def _fetch_window(
-    client,
-    subreddit,
-    start,
-    end,
-    limit,
-    fields,
-    minimum_window,
-    stats,
-    on_complete,
-):
-    try:
-        posts = _request_posts(client, subreddit, start, end, limit, fields, "asc", stats)
-    except QueryTimeoutError as exc:
-        if end - start <= minimum_window:
-            raise QueryTimeoutError(
-                f"[{subreddit}] Query timeout at minimum window width: "
-                f"{_log_time(start)} to {_log_time(end)}: {exc}"
-            ) from exc
-        midpoint = start + (end - start) / 2
+            if post_id and post_id not in merged:
+                merged[post_id] = post
+    if len(merged) >= 1000:
         log.warning(
-            "[%s] Query timeout persisted; splitting window %s to %s",
+            "[%s] same-second flood at %s: merged %d posts from both ends; "
+            "if this second holds more than two pages, some may be skipped",
             subreddit,
-            _log_time(start),
-            _log_time(end),
+            _log_time(datetime.fromtimestamp(ts, timezone.utc)),
+            len(merged),
         )
-        yield from _fetch_window(
-            client,
-            subreddit,
-            start,
-            midpoint,
-            limit,
-            fields,
-            minimum_window,
-            stats,
-            on_complete,
-        )
-        yield from _fetch_window(
-            client,
-            subreddit,
-            midpoint,
-            end,
-            limit,
-            fields,
-            minimum_window,
-            stats,
-            on_complete,
-        )
-        return
-    except Exception as exc:
-        raise ScrapeError(
-            f"[{subreddit}] Request failed for {_log_time(start)} to "
-            f"{_log_time(end)}: {exc}"
-        ) from exc
-
-    if len(posts) >= limit:
-        if end - start <= minimum_window:
-            desc_posts = _request_posts(
-                client, subreddit, start, end, limit, fields, "desc", stats
-            )
-            merged = _merge_unique_posts(posts, desc_posts)
-            log.warning(
-                "[%s] Window saturated at minimum width (%s to %s): captured %d "
-                "unique posts at the tie (asc=%d, desc=%d); any same-timestamp "
-                "overflow beyond that cannot be fetched and is skipped",
-                subreddit,
-                _log_time(start),
-                _log_time(end),
-                len(merged),
-                len(posts),
-                len(desc_posts),
-            )
-            if merged:
-                yield merged
-            stats["completed_windows"] += 1
-            if on_complete:
-                on_complete(end)
-            return
-        midpoint = start + (end - start) / 2
-        log.info(
-            "[%s] Saturated window (%d posts); splitting %s to %s",
-            subreddit,
-            len(posts),
-            _log_time(start),
-            _log_time(end),
-        )
-        yield from _fetch_window(
-            client,
-            subreddit,
-            start,
-            midpoint,
-            limit,
-            fields,
-            minimum_window,
-            stats,
-            on_complete,
-        )
-        yield from _fetch_window(
-            client,
-            subreddit,
-            midpoint,
-            end,
-            limit,
-            fields,
-            minimum_window,
-            stats,
-            on_complete,
-        )
-        return
-
-    if posts:
-        yield posts
-    stats["completed_windows"] += 1
-    if on_complete:
-        on_complete(end)
-    if stats["completed_windows"] % 10 == 0:
-        log.info(
-            "[%s] Progress: %d complete windows, %d API requests, %d posts returned",
-            subreddit,
-            stats["completed_windows"],
-            stats["requests"],
-            stats["posts_returned"],
-        )
+    return list(merged.values())
 
 
-def fetch_posts_batch(client, subreddit, start, end, limit=100, fields=None, on_complete=None):
-    start = _utc_datetime(start)
-    end = _utc_datetime(end)
-    if start >= end:
-        return
-    if limit < 1 or limit > 100:
-        raise ValueError("limit must be between 1 and 100")
-
-    minimum_window = timedelta(seconds=config.MIN_SCRAPE_WINDOW_SECONDS)
-    if minimum_window <= timedelta(0):
-        raise ValueError("MIN_SCRAPE_WINDOW_SECONDS must be positive")
-
-    stats = {"requests": 0, "completed_windows": 0, "posts_returned": 0}
-    for window_start, window_end in split_time_range(start, end, step_hours=720):
-        yield from _fetch_window(
-            client,
-            subreddit,
-            window_start,
-            window_end,
-            limit,
-            fields,
-            minimum_window,
-            stats,
-            on_complete,
-        )
-
-    log.info(
-        "[%s] Fetch complete: %d API requests, %d complete windows, %d posts returned",
-        subreddit,
-        stats["requests"],
-        stats["completed_windows"],
-        stats["posts_returned"],
-    )
-
-
-def scrape_subreddit(subreddit):
-    client = LoggingArcticShiftClient(
-        timeout=config.CLIENT_TIMEOUT,
-        sleep_seconds=config.REQUEST_DELAY,
-        max_retries=config.MAX_ATTEMPTS,
-        backoff_factor=config.BACKOFF_FACTOR,
-    )
-    end = datetime.now(timezone.utc)
-    request_limit = min(config.POSTS_PER_REQUEST, 100)
-    if request_limit < 1:
-        raise ValueError("POSTS_PER_REQUEST must be between 1 and 100")
-
+def scrape_subreddit(client, conn, subreddit, run_end):
     start = get_scrape_start(subreddit, client)
-    if start >= end:
-        log.info("[%s] Checkpoint is already at the current time; nothing to scrape", subreddit)
+    if start >= run_end:
+        log.info("[%s] Checkpoint is current - nothing to scrape", subreddit)
         return 0
 
+    stats = SubStats(subreddit, start, run_end)
+    request_start = client.requests
+    throttle_start = client.pacer.throttles
+    writer = ScrapeWriter(conn)
+
+    after_ts = int(start.timestamp()) - 1
+    before = _api_time(run_end + timedelta(seconds=1))
+    run_end_ts = int(run_end.timestamp())
+    last_max_ts = None
+    last_checkpoint = None
+    last_logged_inserted = 0
+    completed = False
+
     log.info(
-        "[%s] Scraping from %s to %s with a maximum of %d posts per request",
+        "[%s] Scraping %s to %s",
         subreddit,
         _log_time(start),
-        _log_time(end),
-        request_limit,
+        _log_time(run_end),
     )
-
-    count = 0
-    batch_num = 0
-
-    def checkpoint(window_end):
-        database.advance_scrape_state(subreddit, window_end.timestamp())
-        log.debug("[%s] Checkpoint advanced to %s", subreddit, _log_time(window_end))
 
     try:
-        for posts in fetch_posts_batch(
-            client,
-            subreddit=subreddit,
-            start=start,
-            end=end,
-            limit=request_limit,
-            fields=["id", "title", "url", "score", "num_comments", "created_utc", "subreddit"],
-            on_complete=checkpoint,
-        ):
-            actual = database.insert_posts(posts)
-            count += actual
-            batch_num += 1
-            if batch_num % 5 == 0:
-                log.info("[%s] %d new posts inserted after %d batches", subreddit, count, batch_num)
-    except KeyboardInterrupt:
-        log.warning(
-            "[%s] Interrupted after %d new posts and %d batches; rerun to resume",
-            subreddit,
-            count,
-            batch_num,
-        )
+        while True:
+            data = client.search_posts(
+                subreddit=subreddit,
+                after=_api_time(datetime.fromtimestamp(after_ts, timezone.utc)),
+                before=before,
+                limit="auto",
+                sort="asc",
+                fields=FIELDS,
+            )
+            posts = normalize_response(data)
+
+            if not posts:
+                completed = True
+                break
+
+            ts_values = [
+                ts
+                for ts in (_as_ts(p.get("created_utc")) for p in posts)
+                if ts is not None
+            ]
+            if not ts_values:
+                log.warning(
+                    "[%s] page has no usable created_utc; stopping without "
+                    "advancing the checkpoint to now",
+                    subreddit,
+                )
+                break
+
+            max_ts = int(max(ts_values))
+            stats.cursor = datetime.fromtimestamp(max_ts, timezone.utc)
+
+            if last_max_ts is not None and max_ts == last_max_ts:
+                log.debug(
+                    "[%s] no time progress at %s; merging the boundary second",
+                    subreddit,
+                    _log_time(stats.cursor),
+                )
+                writer.add(posts, subreddit, max_ts)
+                boundary = _fetch_boundary_second(client, subreddit, max_ts)
+                writer.add(boundary, subreddit, max_ts)
+                after_ts = max_ts
+                last_max_ts = None
+            else:
+                last_checkpoint = max_ts
+                writer.add(posts, subreddit, max_ts)
+                last_max_ts = max_ts
+                after_ts = max_ts - 1
+
+            stats.inserted = writer.inserted
+            stats.requests = client.requests - request_start
+            stats.throttles = client.pacer.throttles - throttle_start
+            if stats.inserted > last_logged_inserted:
+                log.info(
+                    "[%s] %d post%s inserted - up to %s",
+                    subreddit,
+                    stats.inserted,
+                    "" if stats.inserted == 1 else "s",
+                    _log_time(stats.cursor),
+                )
+                last_logged_inserted = stats.inserted
+            stats.maybe_progress()
+
+            if after_ts >= run_end_ts:
+                completed = True
+                break
+    except (KeyboardInterrupt, Exception):
+        writer.flush(subreddit, last_checkpoint)
         raise
-    except Exception as exc:
-        log.error(
-            "[%s] Scrape stopped at the last complete checkpoint after %d new posts: %s",
-            subreddit,
-            count,
-            exc,
-        )
-        raise
 
-    log.info("[%s] Done: %d new posts inserted in %d batches", subreddit, count, batch_num)
-    return count
+    checkpoint_ts = run_end_ts if completed else last_checkpoint
+    writer.flush(subreddit, checkpoint_ts)
 
-
-def ensure_api_health(subreddit):
-    client = LoggingArcticShiftClient(
-        timeout=config.CLIENT_TIMEOUT,
-        sleep_seconds=config.REQUEST_DELAY,
-        max_retries=config.MAX_ATTEMPTS,
-        backoff_factor=config.BACKOFF_FACTOR,
+    stats.inserted = writer.inserted
+    stats.requests = client.requests - request_start
+    stats.throttles = client.pacer.throttles - throttle_start
+    log.info(
+        "[%s] finished in %s - %d inserted, %d requests, %d throttles",
+        subreddit,
+        _fmt_duration(stats.elapsed()),
+        stats.inserted,
+        stats.requests,
+        stats.throttles,
     )
+    return stats.inserted
+
+
+def make_client():
+    return CursorClient(timeout=config.CLIENT_TIMEOUT)
+
+
+def ensure_api_health(client, subreddit):
     log.info("Checking Arctic Shift health via r/%s ...", subreddit)
     ok, detail = client.check_health(subreddit)
     if not ok:
-        log.error(
-            "Arctic Shift is unreachable (%s); aborting before scraping any subreddit",
-            detail,
-        )
+        log.error("Arctic Shift is unreachable (%s); aborting", detail)
     return ok
 
 
 def scrape_all():
-    total = 0
+    if not config.SUBREDDITS:
+        log.error("No subreddits configured")
+        return 1
+
+    conn = _open_connection()
+    client = make_client()
+
+    started = time.monotonic()
+    total_inserted = 0
+    ok = 0
     failed = []
-    if not ensure_api_health(config.SUBREDDITS[0]):
-        return 1
-    log.info(
-        "Starting scrape for %d subreddits: %s",
-        len(config.SUBREDDITS),
-        ", ".join(config.SUBREDDITS),
-    )
+
     try:
-        for subreddit in config.SUBREDDITS:
+        if not ensure_api_health(client, config.SUBREDDITS[0]):
+            return 1
+
+        log.info("Starting scrape for %d subreddits", len(config.SUBREDDITS))
+
+        for index, subreddit in enumerate(config.SUBREDDITS, 1):
+            run_end = datetime.now(timezone.utc)
+            log.info("[%d/%d] %s", index, len(config.SUBREDDITS), subreddit)
             try:
-                total += scrape_subreddit(subreddit)
-            except Exception as exc:
-                log.error(
-                    "[%s] Skipping subreddit after an unrecoverable error; "
-                    "continuing with the rest: %s",
-                    subreddit,
-                    exc,
+                total_inserted += scrape_subreddit(
+                    client, conn, subreddit, run_end
                 )
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                log.error("[%s] skipped - %s", subreddit, exc)
                 failed.append(subreddit)
-    except KeyboardInterrupt:
-        log.warning("Interrupted. Stopping scrape.")
-        return 130
-    if failed:
-        log.warning(
-            "Scrape finished with %d subreddit(s) skipped: %s",
+                continue
+            ok += 1
+
+        log.info(
+            "Scrape finished in %s - %d inserted, %d ok, %d skipped",
+            _fmt_duration(time.monotonic() - started),
+            total_inserted,
+            ok,
             len(failed),
-            ", ".join(failed),
         )
-        return 1
-    log.info("Scrape complete. %d new posts across %d subreddits.", total, len(config.SUBREDDITS))
-    return 0
+        if failed:
+            log.warning("Skipped subreddits: %s", ", ".join(failed))
+            return 1
+        return 0
+    except KeyboardInterrupt:
+        log.warning(
+            "Scrape interrupted after %s - %d inserted, %d ok, %d skipped",
+            _fmt_duration(time.monotonic() - started),
+            total_inserted,
+            ok,
+            len(failed),
+        )
+        return 130
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
@@ -716,13 +733,20 @@ if __name__ == "__main__":
             subreddit = sys.argv[1]
             if not SUBREDDIT_RE.match(subreddit):
                 log.error(
-                    "Invalid subreddit name: %r (must be 2-21 chars: letters, digits, underscores)",
+                    "Invalid subreddit name: %r (2-21 chars: letters, digits, _)",
                     subreddit,
                 )
                 sys.exit(1)
-            if not ensure_api_health(subreddit):
+
+            client = make_client()
+            if not ensure_api_health(client, subreddit):
                 sys.exit(1)
-            scrape_subreddit(subreddit)
+
+            conn = _open_connection()
+            try:
+                scrape_subreddit(client, conn, subreddit, datetime.now(timezone.utc))
+            finally:
+                conn.close()
         else:
             sys.exit(scrape_all())
     except KeyboardInterrupt:

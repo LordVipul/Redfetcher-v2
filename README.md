@@ -40,7 +40,7 @@ Or scrape a specific subreddit (any subreddit works, not just the ones in config
 python scraper.py programming
 ```
 
-The first run performs a full backfill from the subreddit's earliest available date. Saturated 30-day windows are split into smaller UTC windows until every window is complete. Subsequent runs resume from a durable per-subreddit checkpoint and recheck a 48-hour overlap; interruptions do not advance the checkpoint past an incomplete window.
+The first run performs a full backfill from the subreddit's earliest available date. Pages are fetched with `limit=auto` and an exclusive integer-second date cursor, so each request returns 100–1000 posts and the cursor advances past the last returned second. Subsequent runs resume from a durable per-subreddit checkpoint and recheck a 48-hour overlap; interruptions do not advance the checkpoint past the last fully inserted page.
 
 ### 3. View posts in the browser
 
@@ -82,16 +82,16 @@ python scraper.py unixporn         # Scrape a specific subreddit
 The scraper:
 
 - Connects to the Arctic Shift API (`arctic-shift.photon-reddit.com`)
-- Uses exact UTC timestamps and sequential requests with a two-second delay
-- Starts with 30-day windows and splits any window that returns the 100-post API cap
-- Splits down to a 1-second floor; if a single second still returns 100 posts (a bot/spam flood), it captures up to 200 via ascending + descending queries and advances past the rest
-- Stores posts in the configured database (`RF_DB_PATH`, default `reddit_archive.db`) using batch `INSERT OR IGNORE` (no duplicates)
-- Persists a durable per-subreddit checkpoint after every complete window
+- Paginates with `limit=auto` (100–1000 posts per request) and an exclusive integer-second `after` cursor
+- Pace-adapts between requests: ~0.5 s base interval, gradually speeding up after successes and backing off on throttles (4 s ceiling)
+- Treats `422` "Timeout. Maybe slow down a bit" as a short throttle and retries in 1–8 s instead of splitting the time window
+- Honours `429` `Retry-After` / `X-RateLimit-Reset` / `X-RateLimit-Reset-At`, capped at 60 s
+- Detects a same-second flood (a page that makes no time progress), merges that second from both ends, then advances past it
+- Stores posts in the configured database (`RF_DB_PATH`, default `reddit_archive.db`) with buffered `INSERT OR IGNORE` batches (500 rows or 3 s)
+- Advances the per-subreddit checkpoint in the same transaction as the insert, monotonically
 - Rechecks the last 48 hours on resumed runs to catch recently archived posts
-- Handles API timeouts, rate limits, and service errors with status-aware retry/backoff
-- Retries query-timeout `422` responses with escalating waits (20s, 40s); if the query still times out it falls back to splitting the window
-- Follows every recovered query timeout with an adaptive cooldown that doubles with consecutive timeouts (2s → 30s cap), backing off while the API is strained and returning to the normal pace after a clean stretch
-- Logs HTTP status, response summary, and rate-limit reset headers for API failures
+- Keeps self posts that Arctic Shift returns with an empty `url` by falling back to the canonical Reddit permalink
+- Logs inserted totals as batches commit, progress every 15 s, and a per-subreddit summary; retries show the status label, API message, delay, and attempt number
 - Skips a subreddit on an unrecoverable error and continues with the rest, instead of aborting the whole run
 - **One Ctrl+C stops the entire scrape** — no need to interrupt subreddit-by-subreddit
 
@@ -191,17 +191,9 @@ GROUPS = {
     ...                             # 15 groups total (sidebar sorts them by name)
 }
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]  # derived, used by the scraper
-REQUEST_DELAY = 2.0           # Minimum delay after each API request
 CLIENT_TIMEOUT = 30           # API request timeout
-MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries)
-BACKOFF_FACTOR = 2.0          # Exponential backoff factor
 DB_PATH = os.environ.get("RF_DB_PATH") or str(Path(__file__).resolve().parent / "reddit_archive.db")
 START_YEAR = 2005             # Earliest year checked during full backfill
-POSTS_PER_REQUEST = 100       # Maximum requested from the API
-MIN_SCRAPE_WINDOW_SECONDS = 1 # Stop splitting a saturated window below this width
-QUERY_TIMEOUT_BACKOFF = (20, 40) # Escalating waits (s) for query-timeout 422 retries
-TIMEOUT_COOLDOWN_BASE = 2.0   # Extra sleep after a request that recovered a query timeout; doubles per consecutive timeout
-TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout cooldown
 RESUME_OVERLAP_HOURS = 48     # Recheck recently archived posts on resume
 
 # Post curation (maintenance.py)
@@ -217,6 +209,7 @@ Subreddits within a group are alphabetical; the web sidebar sorts groups by name
 first and Bookmarks last). `SUBREDDITS` is derived from `GROUPS`, so the scraper needs no changes
 when groups change. Because group keys never appear in URLs — the canonical filter is the
 resolved subreddit set — adding, removing, renaming, or merging groups never breaks links.
+Pacing, retry, and insert-batch tunables live at the top of `scraper.py`.
 
 The scraper accepts **any** subreddit as a command-line argument, not just the ones in the groups.
 
@@ -257,10 +250,10 @@ The scraper accepts **any** subreddit as a command-line argument, not just the o
 | Field        | Description                                      |
 | ------------ | ------------------------------------------------ |
 | `subreddit`  | Subreddit name (primary key)                     |
-| `next_start` | First timestamp not yet covered by a full window |
+| `next_start` | Cursor timestamp through which posts have been inserted |
 | `updated_at` | When the checkpoint was last advanced            |
 
-The scraper state is stored in the `scrape_state` table. `next_start` is the first timestamp not yet covered by a complete window; it advances only after the corresponding posts have been inserted. `INSERT OR IGNORE` on the `url` field prevents duplicates from boundary overlap and resumed requests.
+The scraper state is stored in the `scrape_state` table. `next_start` is the cursor timestamp through which posts have been inserted (or the run end when a subreddit finishes); it advances only in the same transaction as the corresponding insert and never regresses. `INSERT OR IGNORE` on the `url` field prevents duplicates from boundary overlap and resumed requests.
 
 ## Data Source
 
@@ -268,7 +261,7 @@ The scraper state is stored in the `scrape_state` table. `next_start` is the fir
 
 - Python client: `arcshiftwrap` (`pip install arcshiftwrap`)
 - Endpoint: `GET /api/posts/search`
-- Max 100 posts per request
+- `limit=auto` returns 100–1000 posts per request; integer `after`/`before` bounds are exclusive at second granularity
 - `sort=asc` is ~10x faster than `sort=desc`
 
 ### Known limitations
@@ -282,7 +275,7 @@ The scraper state is stored in the `scrape_state` table. `next_start` is the fir
 
 ```text
 redfetcher-v2/
-├── config.py          # Groups (sidebar), derived subreddit list, API config, request delay
+├── config.py          # Groups (sidebar), derived subreddit list, API timeout
 ├── database.py        # SQLite init, batch insert, query helpers, group queries, dashboard, bookmarks, scrape state
 ├── scraper.py         # Arctic Shift scraping logic (standalone)
 ├── server.py          # FastAPI web app — routes, groups, bookmarks, dashboard (standalone)
@@ -307,7 +300,7 @@ redfetcher-v2/
 - **No posts showing**: Run `python scraper.py` first, then `python server.py`.
 - **Import error**: Ensure `arcshiftwrap` is installed (`pip install arcshiftwrap`). Import path is `arcshiftwrap.arctic_shift`, not `arcshiftwrap`.
 - **Database locked**: Close any other connections to `reddit_archive.db`.
-- **Slow scraping**: Full backfills make more API requests for dense subreddits; the scraper stays sequential, two seconds per request, with adaptive cooldowns when the API reports query timeouts. Resumed runs recheck only the checkpoint plus the configured overlap.
+- **Slow scraping**: Full backfills still make many requests for dense subreddits. The scraper stays sequential but adapts its interval (~0.5 s base, up to 4 s under load) and uses `limit=auto` pages. Resumed runs recheck only the checkpoint plus the configured overlap.
 - **Ctrl+C stops the entire scrape**: No need to interrupt subreddit-by-subreddit.
 - **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button on any post card to toggle bookmarks.
 
@@ -317,12 +310,12 @@ redfetcher-v2/
 
 1. Read the durable `scrape_state.next_start` checkpoint for the subreddit
 2. If a checkpoint exists, resume 48 hours before it to catch late-arriving archive data
-3. If no checkpoint exists, find the earliest year with posts via yearly scan (`find_start_year`)
-4. Request 30-day UTC windows with `limit=100`
-5. Split every saturated window recursively until each child is below the limit
-6. If a window is still saturated at the 1-second floor (a same-second flood), fetch the opposite end too, keep the unique union (up to 200), and advance — the unreachable overflow is logged and skipped
-7. Batch insert each complete result, then advance the checkpoint only after insertion
-8. On API failure, skip the subreddit and continue with the rest, without advancing past the failed window
+3. If no checkpoint exists, find the earliest year with posts via a single ascending query (`find_start_year`)
+4. Request pages with `limit=auto`, `sort=asc`, `after=cursor-1`, `before=run_end+1s`
+5. Advance the cursor to the newest `created_utc` in each page; across a page boundary the overlap second is re-fetched and de-duplicated by `INSERT OR IGNORE`
+6. If a page makes no time progress (same-second flood), fetch that second from both ends, merge the union, then jump past the whole second
+7. Buffer rows and insert in batches of 500 (or every 3 s), advancing the checkpoint in the same transaction; the checkpoint never regresses
+8. Finish when the page is empty or the cursor reaches `run_end`, then checkpoint at `run_end`; on API failure, skip the subreddit and continue with the rest, without advancing past the last inserted page
 
 ### URL Handling
 

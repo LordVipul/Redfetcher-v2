@@ -54,10 +54,7 @@ GROUPS = {
 
 SUBREDDITS = [sub for _, subs in GROUPS.values() for sub in subs]
 
-REQUEST_DELAY = 2.0
 CLIENT_TIMEOUT = 30          # Long enough for Cloudflare 52x outage pages to surface instead of masking as client timeouts
-MAX_ATTEMPTS = 3              # Total attempts per request (1 initial + retries); formerly MAX_RETRIES = 2
-BACKOFF_FACTOR = 2.0
 
 # Database path. RF_DB_PATH lets a second instance (e.g. a dev copy under
 # _dev/) run against a different file without touching the real archive.
@@ -78,11 +75,6 @@ if SERVER_HOST not in ("0.0.0.0", "::"):
     ALLOWED_HOSTNAMES.add(SERVER_HOST.lower())
 
 START_YEAR = 2005
-POSTS_PER_REQUEST = 100
-MIN_SCRAPE_WINDOW_SECONDS = 1
-QUERY_TIMEOUT_BACKOFF = (20, 40)  # Escalating waits (s) for query-timeout 422 retries; last value repeats
-TIMEOUT_COOLDOWN_BASE = 2.0   # Extra sleep after a request that recovered a query timeout; doubles per consecutive timeout
-TIMEOUT_COOLDOWN_CAP = 30.0   # Upper bound for the adaptive query-timeout cooldown
 RESUME_OVERLAP_HOURS = 48
 
 # Post curation (maintenance.py): the duplicate rule hides same-subreddit
