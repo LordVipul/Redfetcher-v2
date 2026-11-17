@@ -547,10 +547,16 @@ async def remove_bookmark(post_id: str):
 
 @app.post("/posts/{post_id}/hide")
 async def hide_post(post_id: str):
-    hidden = await asyncio.to_thread(database.hide_post, post_id)
-    if not hidden:
+    result = await asyncio.to_thread(database.hide_post, post_id)
+    if result == "missing":
         log.info("POST /posts/%s/hide — post not found", post_id)
         return JSONResponse(status_code=404, content={"error": "post not found"})
+    if result == "bookmarked":
+        log.info("POST /posts/%s/hide — bookmarked post refused", post_id)
+        return JSONResponse(
+            status_code=409,
+            content={"error": "bookmarked posts cannot be hidden", "post_id": post_id},
+        )
     log.info(f"POST /posts/{post_id}/hide — post hidden")
     return JSONResponse({"status": "hidden", "post_id": post_id})
 

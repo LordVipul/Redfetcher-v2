@@ -12,6 +12,28 @@ log = logging.getLogger("redfetcher")
 # window; past it the IN-list fallback keeps fan-out memory bounded.
 GROUP_BRANCH_MAX_WINDOW = 5000
 
+_COUNT_CACHE_TTL = 5.0
+_COUNT_CACHE_MAX = 256
+_count_cache = {}
+_count_cache_lock = threading.Lock()
+
+
+def _cached_count(conn, key, sql, params):
+    now = time.monotonic()
+    hit = _count_cache.get(key)
+    if hit is not None and now - hit[0] < _COUNT_CACHE_TTL:
+        return hit[1]
+    with _count_cache_lock:
+        now = time.monotonic()
+        hit = _count_cache.get(key)
+        if hit is not None and now - hit[0] < _COUNT_CACHE_TTL:
+            return hit[1]
+        count = conn.execute(sql, params).fetchone()[0]
+        if len(_count_cache) >= _COUNT_CACHE_MAX:
+            _count_cache.pop(next(iter(_count_cache)))
+        _count_cache[key] = (now, count)
+        return count
+
 
 def get_connection():
     conn = sqlite3.connect(config.DB_PATH)
@@ -319,18 +341,21 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
             offset = (page - 1) * limit
 
         if subreddit:
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit = ?{filters}",
-                [subreddit] + params,
-            ).fetchone()[0]
+            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit = ?{filters}"
+            count_params = [subreddit] + params
         elif subreddits:
             placeholders = ",".join("?" * len(subreddits))
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters}",
-                list(subreddits) + params,
-            ).fetchone()[0]
+            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters}"
+            count_params = list(subreddits) + params
         else:
-            total = conn.execute(f"SELECT COUNT(*) FROM posts WHERE 1=1{filters}", params).fetchone()[0]
+            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1{filters}"
+            count_params = params
+        total = _cached_count(
+            conn,
+            (subreddit, tuple(subreddits) if subreddits else None, tuple(params)),
+            count_sql,
+            count_params,
+        )
 
         # Group queries: one indexed per-subreddit branch, merged and sorted in
         # SQL. A single IN-list makes SQLite temp-b-tree-sort every matching row
@@ -393,19 +418,25 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
 # ── Hide / curation ───────────────────────────────
 
 def hide_post(post_id):
-    """Set hidden='true' for one post. Returns False when the post doesn't exist."""
+    """Hide one post unless bookmarked. Returns 'missing', 'bookmarked' or 'hidden'."""
     conn = get_connection()
     try:
-        exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if exists is None:
-            return False
+        row = conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM posts WHERE id = ?) AS exists_, "
+            "EXISTS(SELECT 1 FROM bookmarks WHERE post_id = ?) AS bookmarked",
+            (post_id, post_id),
+        ).fetchone()
+        if not row["exists_"]:
+            return "missing"
+        if row["bookmarked"]:
+            return "bookmarked"
         # Idempotent: already-hidden rows are left alone (no churn).
         conn.execute(
             "UPDATE posts SET hidden = 'true' WHERE id = ? AND hidden = 'false'",
             (post_id,),
         )
         conn.commit()
-        return True
+        return "hidden"
     finally:
         conn.close()
 
@@ -434,7 +465,8 @@ def hide_posts_by_urls(urls):
     conn = get_connection()
     try:
         cursor = conn.executemany(
-            "UPDATE posts SET hidden = 'true' WHERE url = ? AND hidden = 'false'",
+            "UPDATE posts SET hidden = 'true' WHERE url = ? AND hidden = 'false' "
+            "AND NOT EXISTS (SELECT 1 FROM bookmarks WHERE post_id = posts.id)",
             [(u,) for u in urls],
         )
         conn.commit()

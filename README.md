@@ -112,8 +112,8 @@ The web UI provides:
     - Date range (start/end)
     - Result limit (50, 100, 200, 500)
 - **Post cards** with title (clickable link to Reddit), subreddit badge (click to filter), score, comment count, date, and bookmark button
-- **Hide button** (X, appears on row hover, feed view only) — hides the post: it stops rendering everywhere and a replacement row is fetched so the page stays at full length; the toast offers **Undo**, which restores the row in place (or, if the page was re-fetched meanwhile, just fixes the counters); hidden rows are pruned later via SQL
-- **Cleanup jobs** (`maintenance.py`) — exact duplicates and dead external links are hidden automatically; both rules only touch link-level facts, never score-based quality judgement
+- **Hide button** (X, appears on row hover, feed view only) — hides the post: it stops rendering everywhere and a replacement row is fetched so the page stays at full length; the toast offers **Undo**, which restores the row in place (or, if the page was re-fetched meanwhile, just fixes the counters); hidden rows are pruned later via SQL. Bookmarked posts cannot be hidden — clicking shows `Bookmarked posts cannot be hidden.`; remove the bookmark first
+- **Cleanup jobs** (`maintenance.py`) — exact duplicates and dead external links are hidden automatically; both rules only touch link-level facts, never score-based quality judgement; bookmarked posts are skipped so a saved post stays visible
 - **Bookmarks** with undo toast notifications; the sidebar count updates live
 - **Dashboard** (`/dashboard`) — total posts/subreddits/bookmarks/score, posts-per-month timeline, top subreddits, per-group totals, top posts, and the full subreddit list. Hidden posts are excluded from every panel; the totals card includes an explicit `hidden` counter.
 - **Settings menu** (gear icon) — dashboard link, hide/show sidebar, text size, reduce motion. All preferences persist in `localStorage`
@@ -131,7 +131,7 @@ The web UI provides:
 | `GET /dashboard`              | Dashboard page (HTML)                   |
 | `POST /bookmarks/{post_id}`   | Add a bookmark                          |
 | `DELETE /bookmarks/{post_id}` | Remove a bookmark                       |
-| `POST /posts/{post_id}/hide`  | Hide a post (never rendered again)      |
+| `POST /posts/{post_id}/hide`  | Hide a post (409 if bookmarked; never rendered again) |
 | `DELETE /posts/{post_id}/hide` | Unhide a post (backing the undo toast) |
 
 Query parameters for `/`, `/api/posts`, and `/api/bookmarks`:

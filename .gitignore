@@ -1,4 +1,8 @@
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.db.bak
 __pycache__/
 _dev/
 *.pyc

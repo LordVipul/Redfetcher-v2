@@ -61,6 +61,7 @@ def hide_duplicated_posts():
                 FROM posts p
                 JOIN first_copies f ON f.subreddit = p.subreddit AND f.title = p.title
                 WHERE p.hidden = 'false'
+                  AND NOT EXISTS (SELECT 1 FROM bookmarks b WHERE b.post_id = p.id)
             )
             SELECT id FROM dupes WHERE rn > 1
             """,
