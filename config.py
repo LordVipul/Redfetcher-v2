@@ -15,7 +15,7 @@ GROUPS = {
         "accessibility", "design_critiques", "DesignPorn", "graphic_design", "typography", "UI_Design", "userexperience", "web_design",
     ]),
     "cs": ("CS", [
-        "algorithms", "AskProgramming", "codegolf", "coding", "compsci", "computerscience", "DailyProgrammer", "learnprogramming", "leetcode", "osdev", "programming",
+        "algorithms", "AskProgramming", "codegolf", "coding", "compsci", "computerscience", "dailyprogrammer", "learnprogramming", "leetcode", "osdev", "programming",
     ]),
     "tools": ("Tools", [
         "AutoHotkey", "git", "neovim", "Rainmeter", "vim", "vscode", "zsh",
@@ -24,7 +24,7 @@ GROUPS = {
         "Database", "SQL", "sqlite",
     ]),
     "selfhosted": ("Self-host", [
-        "DataHoarder", "firefox", "FOSS", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
+        "DataHoarder", "firefox", "foss", "homeassistant", "homelab", "linux", "linuxquestions", "opensource", "selfhosted", "sysadmin",
     ]),
     "customisation": ("Customisation", [
         "FirefoxCSS", "hyprland", "neofetch", "Polybar", "terminal_porn", "unixporn", "wallpaperengine", "wallpapers",
@@ -36,16 +36,16 @@ GROUPS = {
         "AndroidGaming", "gaming", "RimWorld", "Stellaris",
     ]),
     "setups": ("Setups", [
-        "AverageBattlestations", "battlestations", "DecentBattlestations", "desksetup", "goodbattlestations", "HomeOffice", "retrobattlestations",
+        "AverageBattlestations", "battlestations", "decentbattlestations", "desksetup", "goodbattlestations", "homeoffice", "retrobattlestations",
     ]),
     "organisation": ("Organisation", [
-        "Declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
+        "declutter", "DeskCableManagement", "minimalism", "organization", "organizationporn",
     ]),
     "scifi": ("Sci-fi", [
         "astrophysics", "printSF", "scifi", "space",
     ]),
     "maker": ("Maker", [
-        "arduino", "electronics", "raspberry_pi", "RightToRepair",
+        "arduino", "electronics", "raspberry_pi", "righttorepair",
     ]),
     "personal": ("Personal", [
         "DigitalEscapeTools", "drawing", "ObsidianMD", "origami", "productivity", "simpleliving",
