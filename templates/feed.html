@@ -93,7 +93,7 @@
         </div>
         <span class="post-date" data-created-utc="{{ post.created_utc }}">{{ post.created_utc|datetimeformat }}</span>
         <span class="r-score"><i class="fa-solid fa-arrow-up"></i> {{ post.score }}</span>
-        <span class="r-comment"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</span>
+        <a class="r-comment" href="https://www.reddit.com/comments/{{ post.id }}/" target="_blank" rel="noopener" title="Open comments on Reddit"><i class="fa-solid fa-comment"></i> {{ post.num_comments }}</a>
         <span class="r-action">
             <button class="bookmark-btn {% if post.id in bookmarked_ids %}is-active{% endif %}" data-post-id="{{ post.id }}" title="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}" aria-pressed="{% if post.id in bookmarked_ids %}true{% else %}false{% endif %}" aria-label="{% if post.id in bookmarked_ids %}Remove bookmark{% else %}Bookmark this post{% endif %}">
                 <i class="fa-solid fa-bookmark"></i>

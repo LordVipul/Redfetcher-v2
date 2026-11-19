@@ -413,6 +413,7 @@ select {
 .post-item > .r-comment {
   font-family: var(--font-mono);
   color: var(--text);
+  text-decoration: none;
   opacity: 0.78;
   font-size: var(--text-sm);
   flex-shrink: 0;

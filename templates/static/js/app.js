@@ -388,9 +388,12 @@
       escapeHtml(post.score == null ? 0 : post.score) +
       "</span>";
     var comments =
-      '<span class="r-comment"><i class="fa-solid fa-comment"></i> ' +
+      '<a class="r-comment" href="https://www.reddit.com/comments/' +
+      escapeHtml(post.id || "") +
+      '/" target="_blank" rel="noopener" title="Open comments on Reddit">' +
+      '<i class="fa-solid fa-comment"></i> ' +
       escapeHtml(post.num_comments == null ? 0 : post.num_comments) +
-      "</span>";
+      "</a>";
     var dt = '<span class="post-date">' + date + "</span>";
     var cls = isBookmarked ? " is-active" : "";
     var pressed = isBookmarked ? "true" : "false";

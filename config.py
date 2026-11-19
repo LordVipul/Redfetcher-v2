@@ -9,7 +9,7 @@ GROUPS = {
         "AIAssisted", "AIToolsPerformance", "ArtificialInteligence", "learnmachinelearning", "LocalLLaMA", "LocalLLM", "LowEndLocalAI", "MachineLearning", "opencode", "opencodeCLI", "PiCodingAgent", "vibecoding",
     ]),
     "web": ("Web dev", [
-        "css", "Frontend", "javascript", "js", "learnjavascript", "node", "webdev",
+        "css", "Frontend", "javascript", "learnjavascript", "node", "webdev",
     ]),
     "design": ("Design", [
         "accessibility", "design_critiques", "DesignPorn", "graphic_design", "typography", "UI_Design", "userexperience", "web_design",
