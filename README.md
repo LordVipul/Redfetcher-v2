@@ -300,7 +300,7 @@ redfetcher-v2/
 - **No posts showing**: Run `python scraper.py` first, then `python server.py`.
 - **Import error**: Ensure `arcshiftwrap` is installed (`pip install arcshiftwrap`). Import path is `arcshiftwrap.arctic_shift`, not `arcshiftwrap`.
 - **Database locked**: Close any other connections to `reddit_archive.db`.
-- **Slow scraping**: Full backfills still make many requests for dense subreddits. The scraper stays sequential but adapts its interval (~0.5 s base, up to 4 s under load) and uses `limit=auto` pages. Resumed runs recheck only the checkpoint plus the configured overlap.
+- **Slow scraping**: Full backfills still make many requests for dense subreddits. The scraper stays sequential but adapts its interval (~0.5 s base, up to 4 s under load) and uses `limit=auto` pages. A full backfill of all configured subreddits can take weeks (about five weeks for the 2026-11 run); resumed runs are much faster because they recheck only the checkpoint plus the configured overlap.
 - **Ctrl+C stops the entire scrape**: No need to interrupt subreddit-by-subreddit.
 - **Bookmarks not working**: The bookmarks feature requires the server to be running. Use the bookmark button on any post card to toggle bookmarks.
 

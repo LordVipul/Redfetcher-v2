@@ -53,7 +53,11 @@ async def enforce_allowed_origins(request: Request, call_next):
             return JSONResponse(
                 status_code=403, content={"error": "cross-origin request refused"}
             )
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
 
 
 def format_date(value):
