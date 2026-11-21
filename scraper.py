@@ -1,6 +1,7 @@
 """Arctic Shift scraper with cursor pagination and adaptive pacing."""
 
 import logging
+import math
 import random
 import re
 import sys
@@ -105,9 +106,10 @@ def _fmt_duration(seconds):
 
 def _as_ts(value):
     try:
-        return float(value)
+        ts = float(value)
     except (TypeError, ValueError):
         return None
+    return ts if math.isfinite(ts) else None
 
 
 def _backoff(attempt, jitter):
@@ -350,6 +352,14 @@ def _valid_post_row(post, index):
 
     post_id = post_id.strip()
     subreddit = subreddit.strip()
+    created_utc = _as_ts(post.get("created_utc"))
+    if created_utc is None:
+        log.warning(
+            "Skipping post %r: invalid created_utc %r",
+            post_id,
+            post.get("created_utc"),
+        )
+        return None
     url = post.get("url")
     if isinstance(url, str) and url.strip():
         url = url.strip()
@@ -363,7 +373,7 @@ def _valid_post_row(post, index):
         post.get("title"),
         post.get("score"),
         post.get("num_comments"),
-        post.get("created_utc"),
+        created_utc,
         subreddit,
     )
 

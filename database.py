@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -83,6 +84,19 @@ def drop_redundant_indexes(conn):
         conn.execute(f"DROP INDEX IF EXISTS {name}")
 
 
+# Bump when the summary trigger definitions change. Trigger-only changes do
+# not alter the aggregates, so a bump replaces the triggers without a rebuild;
+# the data itself is only rebuilt when the consistency check below fails.
+_SUMMARY_VERSION = 2
+
+_SUMMARY_TRIGGER_NAMES = (
+    "stats_posts_created_required",
+    "stats_posts_ai",
+    "stats_posts_au",
+    "stats_posts_ad",
+    "stats_posts_score",
+)
+
 _SUMMARY_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit_hidden ON posts(subreddit, hidden);
 
@@ -107,105 +121,203 @@ CREATE TABLE IF NOT EXISTS stats_month (
     count INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TRIGGER IF NOT EXISTS stats_posts_ai AFTER INSERT ON posts
-BEGIN
-    UPDATE stats_totals SET
-        posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE 0 END,
-        hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE 0 END,
-        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE 0 END,
-        first_post = CASE WHEN NEW.hidden = 'false' AND (first_post IS NULL OR NEW.created_utc < first_post) THEN NEW.created_utc ELSE first_post END,
-        last_post = CASE WHEN NEW.hidden = 'false' AND (last_post IS NULL OR NEW.created_utc > last_post) THEN NEW.created_utc ELSE last_post END
-    WHERE k = 1;
-
-    INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
-    SELECT NEW.subreddit, 1, COALESCE(NEW.score, 0), NEW.created_utc
-    WHERE NEW.hidden = 'false'
-    ON CONFLICT(subreddit) DO UPDATE SET
-        count = count + 1,
-        sum_score = sum_score + COALESCE(NEW.score, 0),
-        last_post = MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc);
-
-    INSERT INTO stats_month(month, count)
-    SELECT strftime('%Y-%m', NEW.created_utc, 'unixepoch'), 1
-    WHERE NEW.hidden = 'false'
-    ON CONFLICT(month) DO UPDATE SET count = count + 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS stats_posts_au AFTER UPDATE OF hidden ON posts
-WHEN OLD.hidden IS NOT NEW.hidden
-BEGIN
-    UPDATE stats_totals SET
-        posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
-        hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE -1 END,
-        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
-        first_post = CASE
-            WHEN NEW.hidden = 'false' THEN MIN(COALESCE(first_post, NEW.created_utc), NEW.created_utc)
-            WHEN OLD.created_utc = first_post THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false')
-            ELSE first_post END,
-        last_post = CASE
-            WHEN NEW.hidden = 'false' THEN MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc)
-            WHEN OLD.created_utc = last_post THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false')
-            ELSE last_post END
-    WHERE k = 1;
-
-    INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
-    VALUES (
-        NEW.subreddit,
-        CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
-        CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
-        NEW.created_utc
-    )
-    ON CONFLICT(subreddit) DO UPDATE SET
-        count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
-        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
-        last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = NEW.subreddit AND hidden = 'false');
-
-    INSERT INTO stats_month(month, count)
-    VALUES (
-        strftime('%Y-%m', NEW.created_utc, 'unixepoch'),
-        CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END
-    )
-    ON CONFLICT(month) DO UPDATE SET
-        count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END;
-
-    DELETE FROM stats_subreddit WHERE subreddit = NEW.subreddit AND count <= 0;
-    DELETE FROM stats_month WHERE month = strftime('%Y-%m', NEW.created_utc, 'unixepoch') AND count <= 0;
-END;
-
-CREATE TRIGGER IF NOT EXISTS stats_posts_ad AFTER DELETE ON posts
-BEGIN
-    UPDATE stats_totals SET
-        posts = posts - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
-        hidden = hidden - CASE WHEN OLD.hidden = 'true' THEN 1 ELSE 0 END,
-        sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
-        first_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = first_post
-            THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false') ELSE first_post END,
-        last_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = last_post
-            THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false') ELSE last_post END
-    WHERE k = 1;
-
-    UPDATE stats_subreddit SET
-        count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
-        sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
-        last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = OLD.subreddit AND hidden = 'false')
-    WHERE subreddit = OLD.subreddit;
-
-    UPDATE stats_month SET
-        count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END
-    WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch');
-
-    DELETE FROM stats_subreddit WHERE subreddit = OLD.subreddit AND count <= 0;
-    DELETE FROM stats_month WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch') AND count <= 0;
-END;
+CREATE TABLE IF NOT EXISTS stats_meta (
+    k TEXT PRIMARY KEY,
+    v INTEGER NOT NULL
+);
 """
+
+_SUMMARY_TRIGGERS = (
+    """
+    CREATE TRIGGER stats_posts_created_required BEFORE INSERT ON posts
+    WHEN NEW.created_utc IS NULL
+    BEGIN
+        SELECT RAISE(IGNORE);
+    END
+    """,
+    """
+    CREATE TRIGGER stats_posts_ai AFTER INSERT ON posts
+    BEGIN
+        UPDATE stats_totals SET
+            posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE 0 END,
+            hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE 0 END,
+            sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE 0 END,
+            first_post = CASE WHEN NEW.hidden = 'false' AND (first_post IS NULL OR NEW.created_utc < first_post) THEN NEW.created_utc ELSE first_post END,
+            last_post = CASE WHEN NEW.hidden = 'false' AND (last_post IS NULL OR NEW.created_utc > last_post) THEN NEW.created_utc ELSE last_post END
+        WHERE k = 1;
+
+        INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
+        SELECT NEW.subreddit, 1, COALESCE(NEW.score, 0), NEW.created_utc
+        WHERE NEW.hidden = 'false'
+        ON CONFLICT(subreddit) DO UPDATE SET
+            count = count + 1,
+            sum_score = sum_score + COALESCE(NEW.score, 0),
+            last_post = MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc);
+
+        INSERT INTO stats_month(month, count)
+        SELECT strftime('%Y-%m', NEW.created_utc, 'unixepoch'), 1
+        WHERE NEW.hidden = 'false'
+        ON CONFLICT(month) DO UPDATE SET count = count + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER stats_posts_au AFTER UPDATE OF hidden ON posts
+    WHEN OLD.hidden IS NOT NEW.hidden
+    BEGIN
+        UPDATE stats_totals SET
+            posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+            hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE -1 END,
+            sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+            first_post = CASE
+                WHEN NEW.hidden = 'false' THEN MIN(COALESCE(first_post, NEW.created_utc), NEW.created_utc)
+                WHEN OLD.created_utc = first_post THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false')
+                ELSE first_post END,
+            last_post = CASE
+                WHEN NEW.hidden = 'false' THEN MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc)
+                WHEN OLD.created_utc = last_post THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false')
+                ELSE last_post END
+        WHERE k = 1;
+
+        INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
+        VALUES (
+            NEW.subreddit,
+            CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+            CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+            NEW.created_utc
+        )
+        ON CONFLICT(subreddit) DO UPDATE SET
+            count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+            sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+            last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = NEW.subreddit AND hidden = 'false');
+
+        INSERT INTO stats_month(month, count)
+        VALUES (
+            strftime('%Y-%m', NEW.created_utc, 'unixepoch'),
+            CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END
+        )
+        ON CONFLICT(month) DO UPDATE SET
+            count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END;
+
+        DELETE FROM stats_subreddit WHERE subreddit = NEW.subreddit AND count <= 0;
+        DELETE FROM stats_month WHERE month = strftime('%Y-%m', NEW.created_utc, 'unixepoch') AND count <= 0;
+    END
+    """,
+    """
+    CREATE TRIGGER stats_posts_ad AFTER DELETE ON posts
+    BEGIN
+        UPDATE stats_totals SET
+            posts = posts - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
+            hidden = hidden - CASE WHEN OLD.hidden = 'true' THEN 1 ELSE 0 END,
+            sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
+            first_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = first_post
+                THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false') ELSE first_post END,
+            last_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = last_post
+                THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false') ELSE last_post END
+        WHERE k = 1;
+
+        UPDATE stats_subreddit SET
+            count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
+            sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
+            last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = OLD.subreddit AND hidden = 'false')
+        WHERE subreddit = OLD.subreddit;
+
+        UPDATE stats_month SET
+            count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END
+        WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch');
+
+        DELETE FROM stats_subreddit WHERE subreddit = OLD.subreddit AND count <= 0;
+        DELETE FROM stats_month WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch') AND count <= 0;
+    END
+    """,
+    """
+    CREATE TRIGGER stats_posts_score AFTER UPDATE OF score ON posts
+    WHEN OLD.score IS NOT NEW.score
+     AND OLD.hidden = 'false' AND NEW.hidden = 'false'
+    BEGIN
+        UPDATE stats_totals SET
+            sum_score = sum_score + COALESCE(NEW.score, 0) - COALESCE(OLD.score, 0)
+        WHERE k = 1
+          AND EXISTS (SELECT 1 FROM stats_subreddit WHERE subreddit = NEW.subreddit);
+
+        UPDATE stats_subreddit SET
+            sum_score = sum_score + COALESCE(NEW.score, 0) - COALESCE(OLD.score, 0)
+        WHERE subreddit = NEW.subreddit;
+    END
+    """,
+)
+
+
+def _summary_version(conn):
+    row = conn.execute(
+        "SELECT v FROM stats_meta WHERE k = 'schema_version'"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _ensure_summary_triggers(conn):
+    """Replace summary triggers when their version or set is stale.
+
+    ``CREATE TRIGGER IF NOT EXISTS`` cannot update an existing trigger body, so
+    the trigger set is versioned in ``stats_meta``. The drop and recreate are
+    one transaction: other connections keep seeing the old set until commit.
+    """
+    existing = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'trigger' AND name LIKE 'stats_posts_%'"
+        )
+    }
+    if (
+        _summary_version(conn) == _SUMMARY_VERSION
+        and set(_SUMMARY_TRIGGER_NAMES) <= existing
+    ):
+        return
+
+    conn.execute("BEGIN")
+    try:
+        for name in existing:
+            conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
+        for statement in _SUMMARY_TRIGGERS:
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO stats_meta(k, v) VALUES('schema_version', ?) "
+            "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            (_SUMMARY_VERSION,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _summary_is_consistent(conn):
+    row = conn.execute("SELECT posts FROM stats_totals WHERE k = 1").fetchone()
+    if row is None:
+        return False
+    total = row[0]
+    sub_total = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM stats_subreddit"
+    ).fetchone()[0]
+    month_total = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM stats_month"
+    ).fetchone()[0]
+    return sub_total == total and month_total == total
 
 
 def _backfill_summary(conn):
-    """Seed the summary tables once from the existing posts table."""
-    if conn.execute("SELECT 1 FROM stats_totals WHERE k = 1").fetchone() is not None:
+    """Seed the summary tables, rebuilding when they are absent or inconsistent."""
+    if _summary_is_consistent(conn):
         return
+    if conn.execute("SELECT 1 FROM stats_totals WHERE k = 1").fetchone() is None:
+        log.info("Seeding summary tables from posts")
+    else:
+        log.warning("Summary tables inconsistent; rebuilding from posts")
     conn.execute("BEGIN")
     try:
+        conn.execute("DELETE FROM stats_subreddit")
+        conn.execute("DELETE FROM stats_month")
+        conn.execute("DELETE FROM stats_totals")
         conn.execute(
             "INSERT INTO stats_totals(k, posts, sum_score, first_post, last_post, hidden) "
             "VALUES (1, 0, 0, NULL, NULL, 0)"
@@ -306,6 +418,7 @@ def init_db():
         if not had_fts:
             conn.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
         conn.executescript(_SUMMARY_SCHEMA)
+        _ensure_summary_triggers(conn)
         _backfill_summary(conn)
         conn.commit()
         try:
@@ -373,13 +486,24 @@ def _valid_post_row(post, index):
     if not isinstance(subreddit, str) or not subreddit.strip():
         log.warning("Skipping post %r: invalid subreddit %r", post_id, subreddit)
         return None
+    try:
+        created_utc = float(post.get("created_utc"))
+    except (TypeError, ValueError):
+        created_utc = None
+    if created_utc is None or not math.isfinite(created_utc):
+        log.warning(
+            "Skipping post %r: invalid created_utc %r",
+            post_id,
+            post.get("created_utc"),
+        )
+        return None
     return (
         post_id.strip(),
         url.strip(),
         post.get("title"),
         post.get("score"),
         post.get("num_comments"),
-        post.get("created_utc"),
+        created_utc,
         subreddit.strip(),
     )
 
