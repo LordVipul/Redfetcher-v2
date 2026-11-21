@@ -41,7 +41,8 @@ def get_connection():
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA cache_size=-16000")
+    conn.execute("PRAGMA cache_size=-262144")
+    conn.execute("PRAGMA mmap_size=2147483648")
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
@@ -80,6 +81,158 @@ def drop_redundant_indexes(conn):
         "idx_bookmarks_post_id",
     ):
         conn.execute(f"DROP INDEX IF EXISTS {name}")
+
+
+_SUMMARY_SCHEMA = """
+CREATE INDEX IF NOT EXISTS idx_posts_subreddit_hidden ON posts(subreddit, hidden);
+
+CREATE TABLE IF NOT EXISTS stats_totals (
+    k INTEGER PRIMARY KEY CHECK (k = 1),
+    posts INTEGER NOT NULL DEFAULT 0,
+    sum_score INTEGER NOT NULL DEFAULT 0,
+    first_post REAL,
+    last_post REAL,
+    hidden INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS stats_subreddit (
+    subreddit TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0,
+    sum_score INTEGER NOT NULL DEFAULT 0,
+    last_post REAL
+);
+
+CREATE TABLE IF NOT EXISTS stats_month (
+    month TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TRIGGER IF NOT EXISTS stats_posts_ai AFTER INSERT ON posts
+BEGIN
+    UPDATE stats_totals SET
+        posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE 0 END,
+        hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE 0 END,
+        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE 0 END,
+        first_post = CASE WHEN NEW.hidden = 'false' AND (first_post IS NULL OR NEW.created_utc < first_post) THEN NEW.created_utc ELSE first_post END,
+        last_post = CASE WHEN NEW.hidden = 'false' AND (last_post IS NULL OR NEW.created_utc > last_post) THEN NEW.created_utc ELSE last_post END
+    WHERE k = 1;
+
+    INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
+    SELECT NEW.subreddit, 1, COALESCE(NEW.score, 0), NEW.created_utc
+    WHERE NEW.hidden = 'false'
+    ON CONFLICT(subreddit) DO UPDATE SET
+        count = count + 1,
+        sum_score = sum_score + COALESCE(NEW.score, 0),
+        last_post = MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc);
+
+    INSERT INTO stats_month(month, count)
+    SELECT strftime('%Y-%m', NEW.created_utc, 'unixepoch'), 1
+    WHERE NEW.hidden = 'false'
+    ON CONFLICT(month) DO UPDATE SET count = count + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS stats_posts_au AFTER UPDATE OF hidden ON posts
+WHEN OLD.hidden IS NOT NEW.hidden
+BEGIN
+    UPDATE stats_totals SET
+        posts = posts + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+        hidden = hidden + CASE WHEN NEW.hidden = 'true' THEN 1 ELSE -1 END,
+        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+        first_post = CASE
+            WHEN NEW.hidden = 'false' THEN MIN(COALESCE(first_post, NEW.created_utc), NEW.created_utc)
+            WHEN OLD.created_utc = first_post THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false')
+            ELSE first_post END,
+        last_post = CASE
+            WHEN NEW.hidden = 'false' THEN MAX(COALESCE(last_post, NEW.created_utc), NEW.created_utc)
+            WHEN OLD.created_utc = last_post THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false')
+            ELSE last_post END
+    WHERE k = 1;
+
+    INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post)
+    VALUES (
+        NEW.subreddit,
+        CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+        CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+        NEW.created_utc
+    )
+    ON CONFLICT(subreddit) DO UPDATE SET
+        count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END,
+        sum_score = sum_score + CASE WHEN NEW.hidden = 'false' THEN COALESCE(NEW.score, 0) ELSE -COALESCE(NEW.score, 0) END,
+        last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = NEW.subreddit AND hidden = 'false');
+
+    INSERT INTO stats_month(month, count)
+    VALUES (
+        strftime('%Y-%m', NEW.created_utc, 'unixepoch'),
+        CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END
+    )
+    ON CONFLICT(month) DO UPDATE SET
+        count = count + CASE WHEN NEW.hidden = 'false' THEN 1 ELSE -1 END;
+
+    DELETE FROM stats_subreddit WHERE subreddit = NEW.subreddit AND count <= 0;
+    DELETE FROM stats_month WHERE month = strftime('%Y-%m', NEW.created_utc, 'unixepoch') AND count <= 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS stats_posts_ad AFTER DELETE ON posts
+BEGIN
+    UPDATE stats_totals SET
+        posts = posts - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
+        hidden = hidden - CASE WHEN OLD.hidden = 'true' THEN 1 ELSE 0 END,
+        sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
+        first_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = first_post
+            THEN (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false') ELSE first_post END,
+        last_post = CASE WHEN OLD.hidden = 'false' AND OLD.created_utc = last_post
+            THEN (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false') ELSE last_post END
+    WHERE k = 1;
+
+    UPDATE stats_subreddit SET
+        count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END,
+        sum_score = sum_score - CASE WHEN OLD.hidden = 'false' THEN COALESCE(OLD.score, 0) ELSE 0 END,
+        last_post = (SELECT MAX(created_utc) FROM posts WHERE subreddit = OLD.subreddit AND hidden = 'false')
+    WHERE subreddit = OLD.subreddit;
+
+    UPDATE stats_month SET
+        count = count - CASE WHEN OLD.hidden = 'false' THEN 1 ELSE 0 END
+    WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch');
+
+    DELETE FROM stats_subreddit WHERE subreddit = OLD.subreddit AND count <= 0;
+    DELETE FROM stats_month WHERE month = strftime('%Y-%m', OLD.created_utc, 'unixepoch') AND count <= 0;
+END;
+"""
+
+
+def _backfill_summary(conn):
+    """Seed the summary tables once from the existing posts table."""
+    if conn.execute("SELECT 1 FROM stats_totals WHERE k = 1").fetchone() is not None:
+        return
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            "INSERT INTO stats_totals(k, posts, sum_score, first_post, last_post, hidden) "
+            "VALUES (1, 0, 0, NULL, NULL, 0)"
+        )
+        conn.execute(
+            "UPDATE stats_totals SET "
+            "posts = (SELECT COUNT(*) FROM posts WHERE hidden = 'false'), "
+            "sum_score = (SELECT COALESCE(SUM(score), 0) FROM posts WHERE hidden = 'false'), "
+            "first_post = (SELECT MIN(created_utc) FROM posts WHERE hidden = 'false'), "
+            "last_post = (SELECT MAX(created_utc) FROM posts WHERE hidden = 'false'), "
+            "hidden = (SELECT COUNT(*) FROM posts WHERE hidden = 'true') "
+            "WHERE k = 1"
+        )
+        conn.execute(
+            "INSERT INTO stats_subreddit(subreddit, count, sum_score, last_post) "
+            "SELECT subreddit, COUNT(*), COALESCE(SUM(score), 0), MAX(created_utc) "
+            "FROM posts WHERE hidden = 'false' GROUP BY subreddit"
+        )
+        conn.execute(
+            "INSERT INTO stats_month(month, count) "
+            "SELECT strftime('%Y-%m', created_utc, 'unixepoch'), COUNT(*) "
+            "FROM posts WHERE hidden = 'false' GROUP BY 1"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def init_db():
@@ -152,6 +305,8 @@ def init_db():
         _ensure_fts_update_guard(conn)
         if not had_fts:
             conn.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
+        conn.executescript(_SUMMARY_SCHEMA)
+        _backfill_summary(conn)
         conn.commit()
         try:
             os.chmod(config.DB_PATH, 0o600)
@@ -340,22 +495,42 @@ def get_posts(subreddit=None, start_date=None, end_date=None, sort="oldest", lim
         if offset is None:
             offset = (page - 1) * limit
 
-        if subreddit:
-            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit = ?{filters}"
-            count_params = [subreddit] + params
-        elif subreddits:
-            placeholders = ",".join("?" * len(subreddits))
-            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters}"
-            count_params = list(subreddits) + params
-        else:
-            count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1{filters}"
-            count_params = params
-        total = _cached_count(
-            conn,
-            (subreddit, tuple(subreddits) if subreddits else None, tuple(params)),
-            count_sql,
-            count_params,
+        simple_count = not (
+            start_date or end_date
+            or min_score is not None or min_comments is not None
+            or q
         )
+        if simple_count:
+            if subreddit:
+                row = conn.execute(
+                    "SELECT count FROM stats_subreddit WHERE subreddit = ?", (subreddit,)
+                ).fetchone()
+                total = row["count"] if row else 0
+            elif subreddits:
+                placeholders = ",".join("?" * len(subreddits))
+                total = conn.execute(
+                    f"SELECT COALESCE(SUM(count), 0) FROM stats_subreddit WHERE subreddit IN ({placeholders})",
+                    list(subreddits),
+                ).fetchone()[0]
+            else:
+                total = conn.execute("SELECT posts FROM stats_totals WHERE k = 1").fetchone()[0]
+        else:
+            if subreddit:
+                count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit = ?{filters}"
+                count_params = [subreddit] + params
+            elif subreddits:
+                placeholders = ",".join("?" * len(subreddits))
+                count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1 AND subreddit IN ({placeholders}){filters}"
+                count_params = list(subreddits) + params
+            else:
+                count_sql = f"SELECT COUNT(*) FROM posts WHERE 1=1{filters}"
+                count_params = params
+            total = _cached_count(
+                conn,
+                (subreddit, tuple(subreddits) if subreddits else None, tuple(params)),
+                count_sql,
+                count_params,
+            )
 
         # Group queries: one indexed per-subreddit branch, merged and sorted in
         # SQL. A single IN-list makes SQLite temp-b-tree-sort every matching row
@@ -519,7 +694,7 @@ def get_bookmark_ids_for(post_ids):
 
 
 _VISIBLE_BOOKMARK_COUNT_SQL = (
-    "SELECT COUNT(*) FROM bookmarks b JOIN posts p ON p.id = b.post_id "
+    "SELECT COUNT(*) FROM bookmarks b CROSS JOIN posts p ON p.id = b.post_id "
     "WHERE p.hidden = 'false'"
 )
 
@@ -554,7 +729,7 @@ def get_subreddits():
         conn = get_connection()
         try:
             rows = conn.execute(
-                "SELECT DISTINCT subreddit FROM posts WHERE hidden = 'false' ORDER BY subreddit"
+                "SELECT subreddit FROM stats_subreddit WHERE count > 0 ORDER BY subreddit"
             ).fetchall()
         finally:
             conn.close()
@@ -568,9 +743,8 @@ def get_subreddits():
 def get_sidebar_data():
     """Return sidebar stats, bookmark count, and subreddit names as one bundle.
 
-    The stats query scans every visible post, so the result is cached briefly.
-    Hiding, bookmarking, or scraping from another process can leave the bundle
-    up to ``_SIDEBAR_CACHE_TTL`` seconds stale, matching the dashboard cache.
+    Counts come from the maintained summary tables, so this is cheap even with
+    millions of posts. The short cache still smooths out rapid repeated reads.
     """
     now = time.monotonic()
     cached = _sidebar_cache["data"]
@@ -588,8 +762,8 @@ def get_sidebar_data():
             stats = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT subreddit, COUNT(*) as count, MAX(created_utc) as last_updated "
-                    "FROM posts WHERE hidden = 'false' GROUP BY subreddit ORDER BY count DESC"
+                    "SELECT subreddit, count, last_post AS last_updated "
+                    "FROM stats_subreddit WHERE count > 0 ORDER BY count DESC"
                 ).fetchall()
             ]
             bookmark_count = conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
@@ -610,8 +784,8 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
     conn = get_connection()
     try:
         where = """
-            FROM posts p
-            INNER JOIN bookmarks b ON p.id = b.post_id
+            FROM bookmarks b
+            CROSS JOIN posts p ON p.id = b.post_id
             WHERE p.hidden = 'false'
         """
         params = []
@@ -659,22 +833,18 @@ def get_bookmarks(limit=50, offset=0, sort="oldest", subreddit=None, start_date=
 
 # ── Dashboard aggregations ─────────────────────────
 
-# The dashboard re-reads whole-table aggregates that change only when the
-# scraper inserts. A short TLR keeps the page fast during long scrapes
-# without ever serving meaningfully stale numbers.
+# The dashboard reads maintained summary tables, so it stays fast no matter
+# how large posts grows. A short TTL smooths out rapid repeated reads.
 _DASHBOARD_CACHE_TTL = 60.0
 _dashboard_cache = {"at": 0.0, "data": None}
 
 
 def get_dashboard_data(top_posts_limit=10):
-    """One pass over the aggregates the dashboard page needs.
+    """Return the dashboard's aggregates from the maintained summary tables.
 
-    Per-subreddit counts/avg score, monthly post series and top posts. The
-    whole-table scans are bounded by the existing indexes where possible;
-    anything unindexed is a single sequential pass kept behind one connection
-    so the dashboard costs a handful of round trips, not one per panel.
-    Results are cached for a minute — the underlying numbers only move when
-    the scraper inserts.
+    Totals, per-subreddit counts/avg score and the monthly series are O(1) to
+    O(subreddits) now; only the top-posts list still reads posts, via the
+    indexed score sort. Results are cached briefly for repeated reads.
     """
     now = time.monotonic()
     cached = _dashboard_cache["data"]
@@ -685,30 +855,28 @@ def get_dashboard_data(top_posts_limit=10):
     try:
         totals = dict(
             conn.execute(
-                "SELECT COUNT(*) AS posts, COUNT(DISTINCT subreddit) AS subreddits, "
-                "MIN(created_utc) AS first_post, MAX(created_utc) AS last_post, "
-                "SUM(score) AS total_score FROM posts WHERE hidden = 'false'"
+                "SELECT posts, sum_score AS total_score, first_post, last_post, hidden "
+                "FROM stats_totals WHERE k = 1"
             ).fetchone()
         )
-        totals["bookmarks"] = conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
-        totals["hidden"] = conn.execute(
-            "SELECT COUNT(*) FROM posts WHERE hidden = 'true'"
+        totals["subreddits"] = conn.execute(
+            "SELECT COUNT(*) FROM stats_subreddit WHERE count > 0"
         ).fetchone()[0]
+        totals["bookmarks"] = conn.execute(_VISIBLE_BOOKMARK_COUNT_SQL).fetchone()[0]
 
         per_subreddit = [
             dict(r)
             for r in conn.execute(
-                "SELECT subreddit, COUNT(*) AS count, AVG(score) AS avg_score, "
-                "MAX(created_utc) AS last_post FROM posts WHERE hidden = 'false' "
-                "GROUP BY subreddit ORDER BY count DESC"
+                "SELECT subreddit, count, "
+                "CASE WHEN count > 0 THEN CAST(sum_score AS REAL) / count ELSE 0 END AS avg_score, "
+                "last_post FROM stats_subreddit WHERE count > 0 ORDER BY count DESC"
             ).fetchall()
         ]
 
         monthly = [
             dict(r)
             for r in conn.execute(
-                "SELECT strftime('%Y-%m', created_utc, 'unixepoch') AS month, COUNT(*) AS count "
-                "FROM posts WHERE hidden = 'false' GROUP BY month ORDER BY month"
+                "SELECT month, count FROM stats_month ORDER BY month"
             ).fetchall()
         ]
 
